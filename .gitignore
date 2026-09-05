@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.pytest_cache/
+.env
+.env.*
+*.env
+state/
+config.yaml
+config.*.yaml
+catalog.json
+sync-*.json
+smoke-test.json
+dist/
+*.egg-info/
