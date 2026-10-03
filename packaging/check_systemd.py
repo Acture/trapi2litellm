@@ -1,8 +1,10 @@
 """Accept install-only deployment and the generated persistent user service offline."""
 
+import hashlib
 import os
 import subprocess
 from pathlib import Path
+from urllib.error import URLError
 
 from offline_gateway import prepare, probe, wait_ready
 
@@ -26,9 +28,17 @@ def main() -> None:
         run(["systemctl", "--user", "start", names[0]])
         wait_ready(4000)
         probe(4000)
+        with (config / "config.yaml").open("a") as handle:
+            handle.write("# Offline systemd reload acceptance\n")
+        digest = hashlib.sha256((config / "config.yaml").read_bytes()).hexdigest()
         run(["systemctl", "--user", "reload", names[0]])
-        wait_ready(4000)
+        wait_ready(4000, digest=digest)
         probe(4000)
+    except (RuntimeError, URLError, TimeoutError, subprocess.CalledProcessError):
+        subprocess.run(
+            ["journalctl", "--user", "-u", names[0], "--no-pager", "-n", "50"], check=False
+        )
+        raise
     finally:
         run(["systemctl", "--user", "stop", names[0]])
         for name in names:

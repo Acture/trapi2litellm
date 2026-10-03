@@ -33,6 +33,7 @@ def wait_ready(
 ) -> None:
     client = build_opener(ProxyHandler({}))
     deadline = time.monotonic() + 45
+    consecutive = 0
     while time.monotonic() < deadline:
         if process and process.poll() is not None:
             raise RuntimeError("Gateway process exited before becoming ready")
@@ -47,9 +48,13 @@ def wait_ready(
                 if {item["id"] for item in models["data"]} == {"trapi/offline"} and (
                     digest is None or response.headers.get("X-TRAPI-Config-SHA256") == digest
                 ):
-                    return
+                    consecutive += 1
+                    if consecutive >= 3:
+                        return
+                else:
+                    consecutive = 0
         except (URLError, TimeoutError):
-            pass  # The master/worker startup has a bounded readiness deadline.
+            consecutive = 0  # Worker startup has a bounded readiness deadline.
         time.sleep(0.2)
     raise RuntimeError("Gateway did not expose the fixture model")
 
@@ -62,7 +67,7 @@ def probe(port: int) -> None:
             headers={"Authorization": f"Bearer {key}"} if key else {},
         )
         try:
-            client.open(request, timeout=5).close()
+            client.open(request, timeout=30).close()
         except HTTPError as error:
             if error.code != 401:
                 raise
@@ -73,7 +78,7 @@ def probe(port: int) -> None:
             Request(
                 f"http://127.0.0.1:{port}{endpoint}", headers={"Authorization": f"Bearer {KEY}"}
             ),
-            timeout=5,
+            timeout=30,
         ) as response:
             if not response.headers.get("X-TRAPI-Config-SHA256"):
                 raise AssertionError("Missing configuration hash")
@@ -106,7 +111,7 @@ def check(command: list[str], work: Path) -> None:
             process.send_signal(signal.SIGHUP)
             wait_ready(port, process, digest)
             probe(port)
-        except (RuntimeError, URLError, AssertionError):
+        except (RuntimeError, URLError, TimeoutError, AssertionError):
             print((work / "gateway.log").read_text())
             raise
         finally:

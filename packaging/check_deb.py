@@ -27,7 +27,11 @@ def run(command: list[str], *, user: bool = False) -> str:
             *command,
         ]
     LOG.info("Running %s", " ".join(command))
-    result = subprocess.run(command, check=True, capture_output=True, text=True)
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as error:
+        LOG.error("%s\n%s", error.stdout, error.stderr)
+        raise
     return result.stdout
 
 
