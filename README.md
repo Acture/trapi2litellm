@@ -8,20 +8,27 @@ License: [AGPL-3.0-only](LICENSE).
 
 ## Install
 
-Python 3.12 and 3.13 are supported. Build the wheel and sdist, then install the
-CLI persistently (the checkout is only needed to build):
+Python 3.12 and 3.13 are supported. Prefer the existing system `uv` and a
+compatible system Python. Build the wheel and sdist, then install the CLI
+persistently (the checkout is only needed to build):
 
 ```fish
-uv build
-uv tool install dist/trapi2litellm-0.1.0-py3-none-any.whl
+uv build --no-managed-python --no-python-downloads --python '>=3.12,<3.14'
+uv tool install --no-managed-python --no-python-downloads --python '>=3.12,<3.14' dist/trapi2litellm-0.1.0-py3-none-any.whl
 trapi2litellm --help
 trapi2litellm --version
 ```
 
+These flags reuse an existing Python rather than downloading another
+interpreter; installation fails if a compatible version is missing. `uv`
+manages an isolated, persistent environment for LiteLLM and the other application
+dependencies. Those dependencies still need to be installed. The installed
+command runs directly, without invoking `uv` on every service start.
+
 For a temporary invocation of the built artifact:
 
 ```fish
-uvx --from ./dist/trapi2litellm-0.1.0-py3-none-any.whl trapi2litellm deploy --dry-run
+uvx --no-managed-python --no-python-downloads --python '>=3.12,<3.14' --from ./dist/trapi2litellm-0.1.0-py3-none-any.whl trapi2litellm deploy --dry-run
 ```
 
 `uvx` can preview units or run the foreground gateway; real deployment refuses
@@ -29,6 +36,8 @@ temporary/cache environments and editable installs. Use `uv tool install`, a
 system package or Homebrew for persistent units. The generated units retain the
 stable installed command (including its symlink), not a versioned environment.
 `--entry-point /absolute/path/to/trapi2litellm` selects an installation explicitly.
+`uvx` environments are disposable caches; systemd units use the persistent
+installed command so cache cleanup cannot remove their application environment.
 
 PyPI publication, the Homebrew formula and a signed apt repository are separate
 delivery steps. The build/acceptance workflow produces wheel/sdist and per-target
@@ -185,6 +194,11 @@ embeds locked dependencies in `/opt/trapi2litellm`. The public command is
 `/usr/bin/trapi2litellm`. It declares the matching system Python minor version
 and derives ELF shared-library dependencies with `dpkg-shlibdeps`. No package
 maintainer scripts download dependencies, authenticate, or start a service.
+The package reuses `/usr/bin/python3`: it contains application dependencies,
+not a second Python distribution or a bundled `uv`. `uv` is a build prerequisite
+only. Choose the wheel/system-uv route above for a smaller download when online
+dependency installation is acceptable; the Debian package carries its
+dependencies for offline installation.
 
 ```fish
 # In a prepared Debian 13 / Ubuntu 24.04 build environment:

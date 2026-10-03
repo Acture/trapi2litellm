@@ -78,3 +78,19 @@ No full gateway build/start, Azure authentication, token-expiry cycle or inferen
 was performed. A manual full-build command is recorded in the experiment.
 Production code, dependencies and the accepted packaging source remain unchanged.
 `trapi-bridge` is only a naming proposal, awaiting a user decision.
+
+## Runtime reuse preference (2026-10-04)
+
+The user prefers reusing an existing system uv/Python over carrying another
+runtime. The recommended wheel-install commands now select system Python
+3.12/3.13 explicitly and disable managed Python/automatic interpreter downloads.
+Command options were verified against local uv 0.12.17; offline system discovery
+selected `/opt/homebrew/opt/python@3.13/bin/python3.13`. No installation or download
+was performed for this documentation change.
+
+The existing Debian builder already creates its environment from
+`/usr/bin/python3` with downloads disabled; it carries locked application
+dependencies, not a second Python distribution or uv executable. Persistent
+`uv tool install` remains the service route; cache-based `uvx` remains for
+temporary commands/foreground serving. Packaging implementation and previously
+accepted artifact evidence are unchanged.
