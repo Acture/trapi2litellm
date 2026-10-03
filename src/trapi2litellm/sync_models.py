@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
@@ -22,7 +23,7 @@ import httpx
 import yaml
 from azure.identity import ManagedIdentityCredential
 
-from settings import (
+from trapi2litellm.settings import (
     API_VERSION,
     BASE_URL,
     CATALOG_VERSION,
@@ -294,11 +295,11 @@ def sync(bootstrap: bool = False, no_reload: bool = False) -> dict:
         return result
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="trapi2litellm sync", description=__doc__)
     parser.add_argument("--bootstrap", action="store_true")
     parser.add_argument("--no-reload", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING)
     try:
         result = sync(bootstrap=args.bootstrap, no_reload=args.no_reload)

@@ -10,9 +10,11 @@ import json
 import os
 from pathlib import Path
 
+from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from settings import STATE_DIR
+from trapi2litellm.settings import STATE_DIR
 
 CONFIG_PATH = Path(os.environ["CONFIG_FILE_PATH"])
 CONFIG_SHA256 = hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest()
@@ -23,14 +25,14 @@ if not MASTER_KEY:
 from litellm.proxy.proxy_server import app as upstream_app
 
 
-async def catalog(request):
+async def catalog(request: Request) -> JSONResponse:
     path = STATE_DIR / "catalog.json"
     if not path.exists():
         return JSONResponse({"error": "No successful catalog sync yet"}, status_code=503)
     return JSONResponse(json.loads(path.read_text()))
 
 
-async def status(request):
+async def status(request: Request) -> JSONResponse:
     from importlib.metadata import version
 
     result = {
@@ -51,10 +53,10 @@ upstream_app.add_route("/status", status, methods=["GET"])
 
 
 class MasterKeyGate:
-    def __init__(self, wrapped):
+    def __init__(self, wrapped: ASGIApp) -> None:
         self.wrapped = wrapped
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] in ("http", "websocket"):
             headers = dict(scope.get("headers", []))
             auth = headers.get(b"authorization", b"")
@@ -79,7 +81,7 @@ class MasterKeyGate:
                     await response(scope, receive, send)
                 return
 
-        async def send_with_version(message):
+        async def send_with_version(message: Message) -> None:
             if message["type"] == "http.response.start":
                 message = dict(message)
                 message["headers"] = list(message.get("headers", [])) + [

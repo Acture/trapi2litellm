@@ -1,16 +1,39 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
 [project]
 name = "trapi2litellm"
 version = "0.1.0"
-requires-python = ">=3.13,<3.14"
+description = "Managed-identity TRAPI discovery and a local LiteLLM gateway"
+readme = "README.md"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.14"
 dependencies = [
   "litellm[proxy]==1.99.0",
   "azure-identity==1.25.3",
   "gunicorn==23.0.0",
   "uvicorn-worker==0.4.0",
+  "httpx==0.28.1",
+  "PyYAML==6.0.3",
+  "starlette==1.6.0",
 ]
 
+[project.scripts]
+trapi2litellm = "trapi2litellm.cli:main"
+
+[project.urls]
+Repository = "https://github.com/Acture/trapi2litellm"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/trapi2litellm"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/src", "/tests", "/packaging", "/README.md", "/LICENSE", "/pyproject.toml", "/uv.lock"]
+
 [dependency-groups]
-dev = ["ruff==0.15.6"]
+dev = ["ruff==0.15.6", "ty"]
 
 [tool.ruff]
 line-length = 100
@@ -19,4 +42,5 @@ line-length = 100
 select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.ruff.lint.per-file-ignores]
-"gateway_app.py" = ["E402"]
+"src/trapi2litellm/gateway_app.py" = ["E402"]
+"tests/test_sync.py" = ["E402"]
