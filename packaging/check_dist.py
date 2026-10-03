@@ -160,6 +160,8 @@ def main() -> None:
             # A non-Linux host can reject systemd; a persistent Linux CI host
             # must complete install-only deployment without Azure access.
             if sys.platform.startswith("linux"):
+                if rejected.returncode:
+                    print(rejected.stderr, file=sys.stderr)
                 rejected.check_returncode()
                 run([args.python, str(root / "packaging/check_systemd.py")], cwd=work, env=tool_env)
             elif "non-persistent" in rejected.stderr:

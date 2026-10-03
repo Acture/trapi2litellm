@@ -26,7 +26,8 @@ def persistence_problem(entry: Path) -> str | None:
         if any(path.is_relative_to(root.expanduser().resolve()) for root in roots):
             return f"{path} is in a temporary or cache directory"
         for parent in path.parents:
-            if (parent / "CACHEDIR.TAG").is_file():
+            # uv marks each venv itself; a tag above it identifies a cache.
+            if (parent / "CACHEDIR.TAG").is_file() and not (parent / "pyvenv.cfg").is_file():
                 return f"{path} is inside a cache ({parent})"
             if parent != Path.home().resolve() and (parent / "pyproject.toml").is_file():
                 return f"{path} is inside a source checkout ({parent})"

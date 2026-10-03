@@ -112,6 +112,8 @@ class CliTests(unittest.TestCase):
                     "editable", deploy.persistence_problem(environment / "bin/trapi2litellm") or ""
                 )
                 record.unlink()
+                (environment / "CACHEDIR.TAG").touch()
+                self.assertIsNone(deploy.persistence_problem(environment / "bin/trapi2litellm"))
                 (root / "CACHEDIR.TAG").touch()
                 self.assertIn(
                     "cache", deploy.persistence_problem(environment / "bin/trapi2litellm") or ""

@@ -22,6 +22,12 @@ This file owns the measured packaging evidence; channel integration is P-867.
   deployment refusing to authenticate, enable/start services or create a key.
   Wheel/sdist were rebuilt after these final source changes.
 - User confirmed AGPL-3.0-only. LICENSE and SPDX package metadata are present.
+- Source implementation committed as `dc77757` and pushed to the P-866 branch.
+  [Linux CI](https://github.com/Acture/trapi2litellm/actions/runs/37133517956)
+  passed both Python jobs, then exposed a false rejection of uv tool's own
+  venv CACHEDIR.TAG in both installed-distribution jobs. The source fix ignores
+  the venv's own marker while still rejecting tagged ancestor caches; regression
+  coverage added. Linux persistent-service and Debian matrix remain unaccepted.
 
 ## In flight / not yet accepted
 
@@ -32,7 +38,7 @@ This file owns the measured packaging evidence; channel integration is P-867.
   application dependencies and derived ELF dependencies. Install-time scripts
   do not fetch dependencies or start services. These are application packages
   with vendored dependencies, not Debian archive submissions.
-- Source changes are not yet committed or pushed. No PR, tag, GitHub Release,
-  PyPI publication, Homebrew formula, signed apt source or real host deployment.
+- No PR, tag, GitHub Release, PyPI publication, Homebrew formula, signed apt
+  source or real host deployment.
 - The live Managed Identity/catalog/inference checks remain separate from
   packaging acceptance.
