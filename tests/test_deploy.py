@@ -7,13 +7,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import deploy
+from trapi2litellm import deploy
 
 
 class DeploymentTests(unittest.TestCase):
-    def test_render_one_listener_and_no_secrets(self):
+    def test_render_one_listener_and_no_secrets(self) -> None:
         units = deploy.render_units(
-            Path("/opt/gateway"),
+            Path("/usr/bin/trapi2litellm"),
             Path("/private/config"),
             Path("/private/state"),
             4567,
@@ -21,18 +21,27 @@ class DeploymentTests(unittest.TestCase):
         )
         self.assertEqual(len(units), 3)
         service = units["litellm-trapi.service"]
-        self.assertIn("--bind 127.0.0.1:4567", service)
+        self.assertIn('ExecStart="/usr/bin/trapi2litellm" serve --port 4567', service)
         self.assertIn("EnvironmentFile=/private/config/gateway.env", service)
+        self.assertNotIn("WorkingDirectory", service)
+        self.assertNotIn(".venv", service)
+        self.assertIn(
+            'ExecStart="/usr/bin/trapi2litellm" sync', units["litellm-trapi-sync.service"]
+        )
         self.assertNotIn("LITELLM_MASTER_KEY=", service)
         self.assertIn("AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential", service)
         self.assertIn("ExecReload=/bin/kill -HUP $MAINPID", service)
 
-    def test_unit_paths_escape_specifiers(self):
+    def test_unit_paths_escape_specifiers(self) -> None:
         self.assertEqual(deploy.unit_quote("/a b/%u"), '"/a b/%%u"')
         with self.assertRaises(ValueError):
             deploy.unit_quote("/tmp/a\nExecStart=oops")
+        units = deploy.render_units(
+            Path("/opt/$gateway/bin/trapi2litellm"), Path("/config"), Path("/state"), 4000, {}
+        )
+        self.assertIn("/opt/$$gateway/bin/trapi2litellm", units["litellm-trapi.service"])
 
-    def test_refuse_foreign_unit(self):
+    def test_refuse_foreign_unit(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "example.service"
             path.write_text("[Unit]\nDescription=Some other service\n")
@@ -40,7 +49,7 @@ class DeploymentTests(unittest.TestCase):
                 deploy.managed_write(path, deploy.MARKER + "[Unit]\n")
             self.assertIn("Some other service", path.read_text())
 
-    def test_noop_and_backup(self):
+    def test_noop_and_backup(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "example.service"
             original = deploy.MARKER + "first\n"
@@ -49,7 +58,7 @@ class DeploymentTests(unittest.TestCase):
             self.assertTrue(deploy.managed_write(path, deploy.MARKER + "second\n"))
             self.assertEqual(path.with_suffix(".service.previous").read_text(), original)
 
-    def test_clients_reference_key_file(self):
+    def test_clients_reference_key_file(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)
             deploy.write_client_files(path, 4001)
@@ -59,13 +68,15 @@ class DeploymentTests(unittest.TestCase):
                 self.assertIn("127.0.0.1:4001/v1", text)
                 self.assertNotIn("sk-trapi-", text)
 
-    def test_dry_run_has_no_side_effects(self):
+    def test_dry_run_has_no_side_effects(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             result = subprocess.run(
                 [
                     sys.executable,
-                    str(deploy.SOURCE / "deploy.py"),
+                    "-m",
+                    "trapi2litellm",
+                    "deploy",
                     "--dry-run",
                     "--config-dir",
                     str(root / "config"),
@@ -78,24 +89,24 @@ class DeploymentTests(unittest.TestCase):
                 text=True,
                 check=True,
             )
-            self.assertIn("127.0.0.1:4567", result.stdout)
+            self.assertIn("serve --port 4567", result.stdout)
             self.assertFalse((root / "config").exists())
             self.assertFalse((root / "state").exists())
 
-    def test_settings_override(self):
+    def test_settings_override(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             result = subprocess.run(
                 [
                     sys.executable,
                     "-c",
-                    "import settings; print(settings.CONFIG_DIR); print(settings.LOCAL_URL)",
+                    "from trapi2litellm import settings; print(settings.CONFIG_DIR); print(settings.LOCAL_URL)",
                 ],
                 env={
                     **os.environ,
                     "TRAPI2LITELLM_CONFIG_DIR": folder,
                     "TRAPI2LITELLM_PORT": "4567",
                 },
-                cwd=deploy.SOURCE,
+                cwd=folder,
                 capture_output=True,
                 text=True,
                 check=True,

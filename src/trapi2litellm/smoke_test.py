@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from sync_models import LOCAL_URL, SERVICE, STATE_DIR, atomic_write, local_key
+from trapi2litellm.sync_models import LOCAL_URL, SERVICE, STATE_DIR, atomic_write, local_key
 
 
 def main():

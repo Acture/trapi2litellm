@@ -1,11 +1,14 @@
 """Offline regression checks; no credential or inference requests."""
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import sync_models as sync
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
+from trapi2litellm import sync_models as sync
 
 
 def catalog(*names):

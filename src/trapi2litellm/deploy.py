@@ -4,13 +4,45 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Sequence
 from pathlib import Path
 
-SOURCE = Path(__file__).resolve().parent
+PROGRAM = "trapi2litellm"
 MARKER = "# Managed by trapi2litellm\n"
+REMEDY = "Install persistently with uv tool install, Homebrew or the Debian package; use --entry-point to select that command"
+
+
+def persistence_problem(entry: Path) -> str | None:
+    """Check the stable link and its environment without freezing versioned targets."""
+    roots = [Path(tempfile.gettempdir()), Path("/tmp"), Path("/var/tmp")]
+    roots.append(Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache"))))
+    if cache := os.environ.get("UV_CACHE_DIR"):
+        roots.append(Path(cache))
+    for path in (entry, entry.resolve()):
+        if any(path.is_relative_to(root.expanduser().resolve()) for root in roots):
+            return f"{path} is in a temporary or cache directory"
+        for parent in path.parents:
+            # uv marks each venv itself; a tag above it identifies a cache.
+            if (parent / "CACHEDIR.TAG").is_file() and not (parent / "pyvenv.cfg").is_file():
+                return f"{path} is inside a cache ({parent})"
+            if parent != Path.home().resolve() and (parent / "pyproject.toml").is_file():
+                return f"{path} is inside a source checkout ({parent})"
+            if (parent / "pyvenv.cfg").is_file():
+                for record in parent.glob(
+                    "lib*/python*/site-packages/trapi2litellm-*.dist-info/direct_url.json"
+                ):
+                    if json.loads(record.read_text()).get("dir_info", {}).get("editable"):
+                        return f"{path} is an editable installation"
+    return None
+
+
+def entry_point(explicit: Path | None) -> Path:
+    found = explicit or shutil.which(PROGRAM) or Path(sys.executable).parent / PROGRAM
+    return Path(found).expanduser().absolute()
 
 
 def unit_quote(value: str | Path) -> str:
@@ -22,7 +54,7 @@ def unit_quote(value: str | Path) -> str:
 
 def managed_write(path: Path, content: str, *, legacy: str | None = None) -> bool:
     """Keep one recoverable backup and refuse to overwrite unrelated units."""
-    from sync_models import atomic_write
+    from trapi2litellm.sync_models import atomic_write
 
     if path.exists():
         old = path.read_text()
@@ -36,11 +68,10 @@ def managed_write(path: Path, content: str, *, legacy: str | None = None) -> boo
 
 
 def render_units(
-    source: Path, config_dir: Path, state_dir: Path, port: int, options: dict[str, str]
+    entry: Path, config_dir: Path, state_dir: Path, port: int, options: dict[str, str]
 ) -> dict[str, str]:
     q = unit_quote
-    python = source / ".venv/bin/python"
-    gunicorn = source / ".venv/bin/gunicorn"
+    command = q(entry).replace("$", "$$")
     environments = {
         "TRAPI2LITELLM_CONFIG_DIR": str(config_dir),
         "TRAPI2LITELLM_STATE_DIR": str(state_dir),
@@ -58,21 +89,18 @@ def render_units(
         MARKER
         + f"""[Unit]
 Description=Local TRAPI LiteLLM gateway (Managed Identity)
-After=network-online.target
-Wants=network-online.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
 Type=simple
-WorkingDirectory={str(source).replace("%", "%%")}
 EnvironmentFile={str(config_dir / "gateway.env").replace("%", "%%")}
 {shared}Environment={q("CONFIG_FILE_PATH=" + str(config_dir / "config.yaml"))}
 Environment=LITELLM_MODE=PRODUCTION
 Environment=LITELLM_LOG=WARNING
 Environment=AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential
 Environment=AZURE_CREDENTIAL=DefaultAzureCredential
-ExecStart={q(gunicorn)} gateway_app:app --bind 127.0.0.1:{port} --workers 2 --worker-class uvicorn_worker.UvicornWorker --timeout 120 --graceful-timeout 900 --keep-alive 5 --error-logfile - --log-level warning
+ExecStart={command} serve --port {port}
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
@@ -90,13 +118,10 @@ WantedBy=default.target
         MARKER
         + f"""[Unit]
 Description=Discover TRAPI models and update the local LiteLLM gateway
-After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=oneshot
-WorkingDirectory={str(source).replace("%", "%%")}
-{shared}ExecStart={q(python)} {q(source / "sync_models.py")}
+{shared}ExecStart={command} sync
 TimeoutStartSec=240
 UMask=0077
 NoNewPrivileges=true
@@ -126,7 +151,7 @@ WantedBy=timers.target
 
 
 def write_client_files(config_dir: Path, port: int) -> None:
-    from sync_models import atomic_write
+    from trapi2litellm.sync_models import atomic_write
 
     key_path = config_dir / "gateway.env"
     atomic_write(
@@ -155,26 +180,39 @@ def preflight_units(units: dict[str, str]) -> None:
             paths.append(str(path))
         result = subprocess.run(
             ["systemd-analyze", "--user", "verify", *paths],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
         )
+        if result.returncode:
+            raise ValueError(
+                f"systemd unit validation failed ({result.returncode}): "
+                f"{(result.stderr or result.stdout).strip()}"
+            )
         if "path is not absolute" in result.stderr:
-            raise ValueError("systemd rejected a rendered path")
+            raise ValueError(f"systemd rejected a rendered path: {result.stderr.strip()}")
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="trapi2litellm deploy", description=__doc__)
     parser.add_argument("--config-dir", type=Path)
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument("--port", type=int)
+    parser.add_argument(
+        "--entry-point", type=Path, help="Persistent installed command for the units"
+    )
+    parser.add_argument(
+        "--start", action="store_true", help="Explicitly bootstrap, enable and start services"
+    )
     parser.add_argument(
         "--enable-linger", action="store_true", help="Keep user services alive after logout"
     )
     parser.add_argument(
         "--dry-run", action="store_true", help="Print units only; no writes or network calls"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    if args.enable_linger and not args.start:
+        parser.error("--enable-linger requires --start")
     for key, value in [
         ("TRAPI2LITELLM_CONFIG_DIR", args.config_dir),
         ("TRAPI2LITELLM_STATE_DIR", args.state_dir),
@@ -182,8 +220,7 @@ def main() -> int:
     ]:
         if value is not None:
             os.environ[key] = str(value)
-    import settings
-    import sync_models
+    from trapi2litellm import settings
 
     # Keep secrets out of units: these are endpoint/identity selectors only.
     options = {
@@ -195,25 +232,38 @@ def main() -> int:
     if settings.CLIENT_ID:
         options["AZURE_CLIENT_ID"] = settings.CLIENT_ID
     for runtime_path in (settings.CONFIG_DIR, settings.STATE_DIR):
-        if runtime_path == SOURCE or SOURCE in runtime_path.parents:
-            raise ValueError("Configuration and state must live outside the source checkout")
-    units = render_units(SOURCE, settings.CONFIG_DIR, settings.STATE_DIR, settings.PORT, options)
+        for source in (Path(__file__).resolve().parent, *Path(__file__).resolve().parents):
+            if source == Path.home().resolve():
+                break
+            if source == Path(__file__).resolve().parent or (source / "pyproject.toml").is_file():
+                if runtime_path.is_relative_to(source):
+                    raise ValueError(
+                        "Configuration and state must live outside the application/source tree"
+                    )
+    entry = entry_point(args.entry_point)
+    problem = persistence_problem(entry)
+    units = render_units(entry, settings.CONFIG_DIR, settings.STATE_DIR, settings.PORT, options)
     if args.dry_run:
         for name, content in units.items():
             print(f"# {name}\n{content}")
+        if problem:
+            print(
+                f"Note: deployment would refuse this entry point: {problem}. {REMEDY}",
+                file=sys.stderr,
+            )
         return 0
+    if problem:
+        raise ValueError(f"Refusing a non-persistent entry point: {problem}. {REMEDY}")
     if not sys.platform.startswith("linux"):
         raise ValueError("Deployment currently supports Linux with systemd --user only")
-    for executable in (SOURCE / ".venv/bin/gunicorn", SOURCE / ".venv/bin/python"):
-        if not executable.is_file():
-            raise ValueError("Run uv sync --frozen in the checkout first")
+    if not entry.is_file() or not os.access(entry, os.X_OK):
+        raise ValueError(f"Entry point is not executable: {entry}. {REMEDY}")
     subprocess.run(
         ["systemctl", "--user", "show-environment"], check=True, stdout=subprocess.DEVNULL
     )
     unit_dir = (
         Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "systemd/user"
     )
-    unit_dir.mkdir(parents=True, exist_ok=True)
     # Validate ownership before modifying config or services.
     for name in units:
         target = unit_dir / name
@@ -226,7 +276,10 @@ def main() -> int:
             if expected not in target.read_text():
                 raise ValueError(f"Refusing to replace unrelated unit: {target}")
     preflight_units(units)
-    result = sync_models.sync(bootstrap=True, no_reload=True)
+    from trapi2litellm import sync_models
+
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    settings.CONFIG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
     gateway_changed = False
     for name, content in units.items():
         changed = managed_write(
@@ -239,6 +292,12 @@ def main() -> int:
         check=True,
     )
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
+    if not args.start:
+        print(
+            "Installed units only. To bootstrap and start: trapi2litellm deploy --start (with the same settings)"
+        )
+        return 0
+    result = sync_models.sync(bootstrap=True, no_reload=True)
     if args.enable_linger:
         subprocess.run(["loginctl", "enable-linger", str(os.getuid())], check=True)
     subprocess.run(
