@@ -126,7 +126,10 @@ jobs:
           docker exec trapi2litellm-acceptance python3 packaging/check_deb.py (string replace "$PWD" /src -- debs-old/*.deb) (string replace "$PWD" /src -- debs/*.deb)
       - if: always()
         shell: fish {0}
-        run: docker rm --force trapi2litellm-acceptance
+        run: |
+          if docker container inspect trapi2litellm-acceptance >/dev/null 2>&1
+            docker rm --force trapi2litellm-acceptance
+          end
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: deb-${{ strategy.job-index }}

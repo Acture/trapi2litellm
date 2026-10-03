@@ -89,8 +89,6 @@ def render_units(
         MARKER
         + f"""[Unit]
 Description=Local TRAPI LiteLLM gateway (Managed Identity)
-After=network-online.target
-Wants=network-online.target
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
@@ -120,8 +118,6 @@ WantedBy=default.target
         MARKER
         + f"""[Unit]
 Description=Discover TRAPI models and update the local LiteLLM gateway
-After=network-online.target
-Wants=network-online.target
 
 [Service]
 Type=oneshot
@@ -184,10 +180,15 @@ def preflight_units(units: dict[str, str]) -> None:
             paths.append(str(path))
         result = subprocess.run(
             ["systemd-analyze", "--user", "verify", *paths],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
         )
+        if result.returncode:
+            raise ValueError(
+                f"systemd unit validation failed ({result.returncode}): "
+                f"{(result.stderr or result.stdout).strip()}"
+            )
         if "path is not absolute" in result.stderr:
             raise ValueError(f"systemd rejected a rendered path: {result.stderr.strip()}")
 

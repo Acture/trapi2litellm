@@ -45,7 +45,11 @@ def shared_library_dependencies(stage: Path, work: Path) -> str:
     for path in objects:
         output = run(["readelf", "-d", str(path)], work, capture=True)
         if soname := re.search(r"\(SONAME\).*\[([^\]]+)\]", output):
-            if match := re.fullmatch(r"(.+)\.so\.(.+)", soname[1]):
+            # Match both SONAME forms understood by dpkg-shlibdeps. Wheel
+            # repair tools also use the second form for hashed private libs.
+            if match := re.fullmatch(r"(.+)\.so\.(.+)", soname[1]) or re.fullmatch(
+                r"(.+)-(\d.*)\.so", soname[1]
+            ):
                 local.add(f"{match[1]} {match[2]} trapi2litellm")
     (debian / "shlibs.local").write_text("\n".join(sorted(local)) + "\n")
     command = [
@@ -152,10 +156,12 @@ def main() -> None:
             '#!/usr/bin/python3\nimport os\nimport sys\nos.execv("/opt/trapi2litellm/bin/python", ["/opt/trapi2litellm/bin/python", "-m", "trapi2litellm", *sys.argv[1:]])\n'
         )
         binary.chmod(0o755)
-        dependencies = shared_library_dependencies(stage, work)
-        minor = sys.version_info.minor
+        # dpkg recognizes this as one package build tree, including its
+        # private libraries, only once DEBIAN exists.
         control = stage / "DEBIAN"
         control.mkdir()
+        dependencies = shared_library_dependencies(stage, work)
+        minor = sys.version_info.minor
         installed_size = (
             sum(
                 path.stat().st_size
@@ -179,6 +185,10 @@ def main() -> None:
         run(["dpkg-deb", "--root-owner-group", "--build", str(stage), str(destination)], work)
         shutil.copyfile(work / "shlibdeps.txt", output / f"{destination.stem}.shlibdeps.txt")
         LOG.info("Built %s (Python 3.%s, %s)", destination, minor, architecture)
+        LOG.info("System dependencies: %s", dependencies)
+        LOG.info(
+            "Installed size: %s KiB; package: %s bytes", installed_size, destination.stat().st_size
+        )
 
 
 if __name__ == "__main__":
