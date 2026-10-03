@@ -1,6 +1,6 @@
 # Distribution status
 
-Execution home: [P-866](https://linear.app/acturea/issue/P-866).
+Execution home: [OSS-76](https://linear.app/acturea/issue/OSS-76), formerly P-866.
 This file owns the measured packaging evidence; channel integration is P-867.
 
 ## Accepted source and artifacts (2026-10-04)
@@ -49,8 +49,9 @@ Debian archive submissions.
 
 ## Delivery boundaries
 
-- Source and CI artifacts are available; no PR, tag, GitHub Release, PyPI
+- Source and CI artifacts are available; no tag, GitHub Release, PyPI
   publication, Homebrew formula, signed apt source or real host deployment.
+- Pull-request review and delivery links are tracked in the Linear execution home.
 - Homebrew and signed apt delivery are P-867. AGPL and packaging work retain
   Python + LiteLLM; a Go/Rust proxy would be a separate implementation decision.
 - Live Managed Identity, inference, streaming during reload and credential-expiry
@@ -94,3 +95,12 @@ dependencies, not a second Python distribution or uv executable. Persistent
 `uv tool install` remains the service route; cache-based `uvx` remains for
 temporary commands/foreground serving. Packaging implementation and previously
 accepted artifact evidence are unchanged.
+
+## Pull-request preparation checks (2026-10-04)
+
+Fresh local ruff check/format, ty, actionlint and all 38 offline regression tests
+passed. The accepted CI run was rechecked and remains successful. Since the
+accepted source, changes are limited to README/STATUS and the isolated AISIX
+experiment; application and packaging implementation files are unchanged.
+The target branch is `main`. PR checks will validate the proposed merge; the
+earlier accepted run establishes the packaging evidence recorded above.
