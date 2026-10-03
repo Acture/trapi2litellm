@@ -132,6 +132,10 @@ def main() -> None:
             "UV_TOOL_DIR": str(tool_root / "envs"),
             "UV_TOOL_BIN_DIR": str(tool_root / "bin"),
         }
+        if args.tool_root:
+            # PrivateTmp deliberately hides /tmp from the generated service.
+            tool_env["TRAPI2LITELLM_CONFIG_DIR"] = str(tool_root / "runtime/config")
+            tool_env["TRAPI2LITELLM_STATE_DIR"] = str(tool_root / "runtime/state")
         run(
             [
                 "uv",

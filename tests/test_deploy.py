@@ -22,7 +22,7 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(len(units), 3)
         service = units["litellm-trapi.service"]
         self.assertIn('ExecStart="/usr/bin/trapi2litellm" serve --port 4567', service)
-        self.assertIn('EnvironmentFile="/private/config/gateway.env"', service)
+        self.assertIn("EnvironmentFile=/private/config/gateway.env", service)
         self.assertNotIn("WorkingDirectory", service)
         self.assertNotIn(".venv", service)
         self.assertIn(

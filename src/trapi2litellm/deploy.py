@@ -96,7 +96,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-EnvironmentFile={q(config_dir / "gateway.env")}
+EnvironmentFile={str(config_dir / "gateway.env").replace("%", "%%")}
 {shared}Environment={q("CONFIG_FILE_PATH=" + str(config_dir / "config.yaml"))}
 Environment=LITELLM_MODE=PRODUCTION
 Environment=LITELLM_LOG=WARNING
@@ -189,7 +189,7 @@ def preflight_units(units: dict[str, str]) -> None:
             text=True,
         )
         if "path is not absolute" in result.stderr:
-            raise ValueError("systemd rejected a rendered path")
+            raise ValueError(f"systemd rejected a rendered path: {result.stderr.strip()}")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
