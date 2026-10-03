@@ -3,7 +3,9 @@ name: Package acceptance
 on:
   push:
     branches: ["**"]
+    paths-ignore: ["STATUS.md"]
   pull_request:
+    paths-ignore: ["STATUS.md"]
   workflow_dispatch:
 
 permissions:

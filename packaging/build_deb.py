@@ -171,7 +171,7 @@ def main() -> None:
             // 1024
         )
         (control / "control").write_text(
-            f"Package: trapi2litellm\nVersion: {deb_version}\nArchitecture: {architecture}\nSection: net\nPriority: optional\nMaintainer: Acture <acturea@gmail.com>\nInstalled-Size: {installed_size}\nDepends: python3 (>= 3.{minor}), python3 (<< 3.{minor + 1}), {dependencies}\nHomepage: https://github.com/Acture/trapi2litellm\nDescription: Managed-identity TRAPI discovery and local LiteLLM gateway\n Isolated locked application dependencies; explicit systemd user deployment.\n"
+            f"Package: trapi2litellm\nVersion: {deb_version}\nArchitecture: {architecture}\nSection: net\nPriority: optional\nMaintainer: Acture <acturea@gmail.com>\nInstalled-Size: {installed_size}\nDepends: python3 (>= 3.{minor}), python3 (<< 3.{minor + 1}), systemd, dbus-user-session, procps, {dependencies}\nHomepage: https://github.com/Acture/trapi2litellm\nDescription: Managed-identity TRAPI discovery and local LiteLLM gateway\n Isolated locked application dependencies; explicit systemd user deployment.\n"
         )
         doc = stage / "usr/share/doc/trapi2litellm"
         doc.mkdir(parents=True)
