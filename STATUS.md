@@ -3,42 +3,55 @@
 Execution home: [P-866](https://linear.app/acturea/issue/P-866).
 This file owns the measured packaging evidence; channel integration is P-867.
 
-## Measured locally (2026-10-03, macOS arm64)
+## Accepted source and artifacts (2026-10-04)
 
-- Python 3.12: wheel and sdist built from a disposable source copy, copy removed,
-  artifacts installed into independent environments and 37 offline tests passed
-  from the sdist's test files.
-- Python 3.12: uvx help/version/preview work and real deployment is refused;
-  isolated uv tool installation retains its PATH-visible command in rendered
-  units. Local tool directories are temporary, so actual persistent deployment
-  is reserved for the Linux CI check.
-- Actual foreground gateway: synthetic catalog, missing/wrong-key rejection,
-  authenticated model/catalog/status/info endpoints, configuration hash change
-  after Gunicorn HUP. No identity authentication or inference was requested.
-- ruff check, ruff format, ty check and actionlint passed.
-- Python 3.13: wheel/sdist installation with included offline tests, the actual
-  installed foreground gateway, HUP, uvx and isolated uv tool checks passed.
-- Final source regression: 38 offline tests passed, including install-only
-  deployment refusing to authenticate, enable/start services or create a key.
-  Wheel/sdist were rebuilt after these final source changes.
-- User confirmed AGPL-3.0-only. LICENSE and SPDX package metadata are present.
-- Source implementation committed as `dc77757` and pushed to the P-866 branch.
-  [Linux CI](https://github.com/Acture/trapi2litellm/actions/runs/37133517956)
-  passed both Python jobs, then exposed a false rejection of uv tool's own
-  venv CACHEDIR.TAG in both installed-distribution jobs. The source fix ignores
-  the venv's own marker while still rejecting tagged ancestor caches; regression
-  coverage added. Linux persistent-service and Debian matrix remain unaccepted.
+Version: `0.1.0`. License: `AGPL-3.0-only`, confirmed by the user; the wheel
+contains the full LICENSE and SPDX License-Expression / License-File metadata.
 
-## In flight / not yet accepted
+Accepted source: `6d285cf2e2c97d750b82db8aca375d2309ac1c16`, pushed to
+`feature/p-866-建立安装包-cli-和稳定服务入口，发行-wheelsdist-与-debian-包`.
+[CI run 37136435242](https://github.com/Acture/trapi2litellm/actions/runs/37136435242)
+completed successfully with all eight jobs passing. Five uploaded artifacts
+were verified present and unexpired at acceptance: wheel/sdist and four native
+Debian packages. This ledger update does not change the accepted source.
 
-- Linux CI owns real persistent uv tool unit installation, and Debian 13 /
-  Ubuntu 24.04 × amd64 / arm64 .deb building and offline lifecycle acceptance.
-  Docker is not running locally. Adding the workflow is not passing evidence.
-- Debian packages carry the target system Python minor constraint, locked private
-  application dependencies and derived ELF dependencies. Install-time scripts
-  do not fetch dependencies or start services. These are application packages
-  with vendored dependencies, not Debian archive submissions.
-- No PR, tag, GitHub Release, PyPI publication, Homebrew formula, signed apt
-  source or real host deployment.
-- The live Managed Identity/catalog/inference checks remain separate from
-  packaging acceptance.
+| Target | Verified behavior |
+| --- | --- |
+| Python 3.12 and 3.13 | Frozen dependencies, lint/types, 38 offline tests, wheel/sdist build |
+| Ubuntu amd64 and arm64 | Independent wheel/sdist installs after source removal; uvx preview and temporary-deploy refusal; persistent uv tool user units; real gateway start and HUP/reload |
+| Debian 13 amd64 and arm64 (Python 3.13) | Native .deb build; offline install, user-service start, upgrade/restart, remove, purge and reinstall |
+| Ubuntu 24.04 amd64 and arm64 (Python 3.12) | Native .deb build; offline install, user-service start, upgrade/restart, remove, purge and reinstall |
+
+Distribution checks probe missing/wrong-key rejection and authenticated
+model/catalog/status/info endpoints using a synthetic catalog. Reload checks
+wait for the new configuration hash. They do not authenticate to Azure or call
+inference. Debian lifecycle tests run with Docker networking disabled and prove
+that installation does not create a user key/configuration or start a service;
+upgrade/removal retain the user's key and state. The upgrade fixture uses an
+earlier Debian revision of the same payload, not a previously published release.
+
+Debian packages constrain the system Python minor, embed hashed locked application
+dependencies, derive ELF system dependencies and declare systemd,
+dbus-user-session and procps. Maintainer scripts do not download dependencies,
+authenticate or start services. These are vendored application packages, not
+Debian archive submissions.
+
+## Local verification (2026-10-03–04, macOS arm64)
+
+- Python 3.12 and 3.13 wheel/sdist installations from a removed disposable
+  source copy passed included offline tests and actual foreground gateway/HUP
+  probes. uvx and isolated uv tool checks passed; the local tool directories
+  were temporary, with real persistent deployment verified separately in CI.
+- Final source regression: 38 offline tests, ruff check / format, ty and
+  actionlint passed. Local wheel/sdist were rebuilt from the accepted source.
+- Docker was not running locally; native Linux package acceptance was performed
+  by the CI jobs above.
+
+## Delivery boundaries
+
+- Source and CI artifacts are available; no PR, tag, GitHub Release, PyPI
+  publication, Homebrew formula, signed apt source or real host deployment.
+- Homebrew and signed apt delivery are P-867. AGPL and packaging work retain
+  Python + LiteLLM; a Go/Rust proxy would be a separate implementation decision.
+- Live Managed Identity, inference, streaming during reload and credential-expiry
+  checks remain separate from this synthetic packaging acceptance.
