@@ -55,3 +55,26 @@ Debian archive submissions.
   Python + LiteLLM; a Go/Rust proxy would be a separate implementation decision.
 - Live Managed Identity, inference, streaming during reload and credential-expiry
   checks remain separate from this synthetic packaging acceptance.
+
+## Rust gateway compatibility probe (2026-10-04)
+
+The user requested an isolated evaluation without replacing LiteLLM. The
+[AISIX experiment](experiments/aisix/README.md) pins release `v1.5.0` at
+`26497758704c28f62bb9d1d763886140691a365b`. Upstream source hashes were verified;
+the unchanged Azure URL resolver/validator was compiled with Rust 1.96.1 in a
+dependency-free test crate. Only its error container was substituted.
+
+Five requirement assertions ran: one passed and four failed. TRAPI's base path
+is preserved, but the existing dotted deployment ID is rejected, the generation
+API version differs, the attempted query override is rejected, and the source
+token-audience constant differs. The last assertion checks a constant, not
+credential acquisition. Native Azure auth source inspection additionally shows
+application client credentials/API keys rather than Managed Identity.
+
+Probe code passed ruff check/format, ty, rustfmt and Cargo Clippy with warnings
+denied. This rejects the released native Azure adapter as a direct replacement;
+it does not establish full gateway behavior or rule out other adapter setups.
+No full gateway build/start, Azure authentication, token-expiry cycle or inference
+was performed. A manual full-build command is recorded in the experiment.
+Production code, dependencies and the accepted packaging source remain unchanged.
+`trapi-bridge` is only a naming proposal, awaiting a user decision.
