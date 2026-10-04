@@ -13,19 +13,33 @@ runtime. Maturin builds one platform wheel containing both; Debian staging keeps
 the native binary beside its Python environment and scans both for ELF libraries.
 
 Local source checks passed: Rust formatting, Clippy and 18 offline tests;
-Python ruff check/format, ty and 11 offline tests; actionlint and frozen lock
+Python ruff check/format, ty and 12 offline tests; actionlint and frozen lock
 validation. Subprocess tests cover deadlines, child reaping and large stdin,
 stdout and stderr. Normal synchronization rollback is covered independently.
+The final caller-relative configuration fix reran the covering Rust CLI/runtime
+tests and Python exec-boundary regression; both review findings were closed.
 
 Actual local artifacts were built with the **dev** profile, not release:
 `trapi2litellm-0.1.0-py3-none-macosx_11_0_arm64.whl` and
 `trapi2litellm-0.1.0.tar.gz`. Separate temporary environments installed the
 wheel and compiled the extracted sdist. Both passed the included Python tests
 and real foreground gateway/auth/model/status/HUP probes using a synthetic
-catalog, including hostile working-directory/PYTHONPATH fixtures. The archives
+catalog, including hostile working-directory/PYTHONPATH fixtures and both
+relative and absolute `CONFIG_FILE_PATH` overrides. The archives
 contain the native CLI, Python runtime and full license; private notes,
 experiments and agent scratch are excluded. These are local development
 artifacts, not published releases.
+
+Verified artifact source: `5dac34c51ec9dddd8320e6822640fd4e47d50169` on the local
+`feature/rust-control` branch. Actual archive SHA-256:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| macOS arm64 dev wheel | `717b1b40e0bb83ca15081a01dbad8d7d72d912408c9188f8fd9ba2748ac62167` |
+| sdist | `d81f95348d47f9676b7743c024dc2118fcb72656c249517568cbc940826004ab` |
+
+Debian now includes the public distribution guide and STATUS beside README;
+its native installation remains part of the pending Linux acceptance.
 
 Linux release wheels, Python 3.13 execution, native systemd deployment and the
 four Debian/Ubuntu targets have **not** been rerun for this Rust migration.
