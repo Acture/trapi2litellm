@@ -44,7 +44,7 @@ sudo apt install ./debs/trapi2litellm_VERSION_ARCH.deb
 ```
 
 Build prerequisites and the pinned uv builder are in
-[packaging/Dockerfile](../packaging/Dockerfile).
+[packaging/Dockerfile](https://github.com/Acture/trapi2litellm/blob/main/packaging/Dockerfile).
 CI checks Debian 13 / Ubuntu 24.04 × amd64 / arm64; installation, upgrade,
 remove/purge and reinstall run with Docker networking disabled. These are
 third-party application packages with vendored Python dependencies, not Debian

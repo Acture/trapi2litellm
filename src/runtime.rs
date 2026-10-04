@@ -97,10 +97,22 @@ impl PythonRuntime {
 
 	pub fn exec(&self, operation: &str, settings: &Settings) -> Result<()> {
 		let mut command: Command = self.command(operation);
-		command.envs(settings.environment()).env(
-			"CONFIG_FILE_PATH",
-			env::var_os("CONFIG_FILE_PATH").map_or_else(|| settings.config_path(), PathBuf::from),
-		);
+		let config_path: PathBuf = match env::var_os("CONFIG_FILE_PATH") {
+			Some(value) => {
+				let path: PathBuf = value.into();
+				// Python changes cwd before Gunicorn imports the gateway.
+				// Keep caller-relative paths and absolute overrides' spelling intact.
+				if path.is_absolute() {
+					path
+				} else {
+					env::current_dir()?.join(path)
+				}
+			}
+			None => settings.config_path(),
+		};
+		command
+			.envs(settings.environment())
+			.env("CONFIG_FILE_PATH", config_path);
 		for (key, default) in [
 			("LITELLM_LOCAL_MODEL_COST_MAP", "True"),
 			("LITELLM_MODE", "PRODUCTION"),

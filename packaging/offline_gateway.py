@@ -85,9 +85,17 @@ def probe(port: int) -> None:
             json.load(response)
 
 
-def check(command: list[str], work: Path) -> None:
+def check(command: list[str], work: Path, config_path: str = "default") -> None:
     config, state = work / "config", work / "state"
     prepare(config, state)
+    selected_config: Path = config / "config.yaml"
+    override: dict[str, str] = {}
+    if config_path != "default":
+        selected_config = work / "custom.yaml"
+        (config / "config.yaml").rename(selected_config)
+        override["CONFIG_FILE_PATH"] = (
+            selected_config.name if config_path == "relative" else str(selected_config)
+        )
     # A local checkout/PYTHONPATH must not replace the installed runtime,
     # including after its second exec into Gunicorn and after worker reload.
     poison = work / "trapi2litellm"
@@ -96,14 +104,15 @@ def check(command: list[str], work: Path) -> None:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
-    env = {
-        **os.environ,
+    env: dict[str, str] = {
+        **{key: value for key, value in os.environ.items() if key != "CONFIG_FILE_PATH"},
         "TRAPI2LITELLM_CONFIG_DIR": str(config),
         "TRAPI2LITELLM_STATE_DIR": str(state),
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
         "LITELLM_MASTER_KEY": KEY,
         "TRAPI2LITELLM_PYTHON": "",
         "PYTHONPATH": str(work),
+        **override,
     }
     with (work / "gateway.log").open("wb") as log:
         process = subprocess.Popen(
@@ -112,9 +121,9 @@ def check(command: list[str], work: Path) -> None:
         try:
             wait_ready(port, process)
             probe(port)
-            with (config / "config.yaml").open("a") as handle:
+            with selected_config.open("a") as handle:
                 handle.write("# Offline reload acceptance\n")
-            digest = hashlib.sha256((config / "config.yaml").read_bytes()).hexdigest()
+            digest = hashlib.sha256(selected_config.read_bytes()).hexdigest()
             process.send_signal(signal.SIGHUP)
             wait_ready(port, process, digest)
             probe(port)
@@ -133,10 +142,16 @@ def check(command: list[str], work: Path) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command")
+    parser.add_argument(
+        "--config-path", choices=("default", "relative", "absolute"), default="default"
+    )
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="trapi2litellm-gateway-") as folder:
-        check([args.command], Path(folder))
-    print("Accepted installed gateway startup, auth, metadata endpoints and HUP (no inference)")
+        check([args.command], Path(folder), args.config_path)
+    print(
+        "Accepted installed gateway startup, auth, metadata endpoints and HUP "
+        f"({args.config_path} configuration path; no inference)"
+    )
 
 
 if __name__ == "__main__":

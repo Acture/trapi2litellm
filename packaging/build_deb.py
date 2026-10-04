@@ -162,6 +162,16 @@ def main() -> None:
         control.mkdir()
         dependencies = shared_library_dependencies(stage, work)
         minor = sys.version_info.minor
+        doc = stage / "usr/share/doc/trapi2litellm"
+        doc.mkdir(parents=True)
+        shutil.copyfile(license_path, doc / "copyright")
+        shutil.copyfile(source / "README.md", doc / "README.md")
+        shutil.copyfile(source / "STATUS.md", doc / "STATUS.md")
+        shutil.copytree(source / "docs", doc / "docs")
+        shutil.copyfile(requirements, doc / "requirements.txt")
+        changelog = f"trapi2litellm ({deb_version}) unstable; urgency=medium\n\n  * Package upstream {version} with an isolated locked application environment.\n\n -- Acture <acturea@gmail.com>  Sat, 03 Oct 2026 00:00:00 +0000\n"
+        with gzip.open(doc / "changelog.Debian.gz", "wb") as handle:
+            handle.write(changelog.encode())
         installed_size = (
             sum(
                 path.stat().st_size
@@ -173,14 +183,6 @@ def main() -> None:
         (control / "control").write_text(
             f"Package: trapi2litellm\nVersion: {deb_version}\nArchitecture: {architecture}\nSection: net\nPriority: optional\nMaintainer: Acture <acturea@gmail.com>\nInstalled-Size: {installed_size}\nDepends: python3 (>= 3.{minor}), python3 (<< 3.{minor + 1}), systemd, dbus-user-session, procps, {dependencies}\nHomepage: https://github.com/Acture/trapi2litellm\nDescription: Managed-identity TRAPI discovery and local LiteLLM gateway\n Isolated locked application dependencies; explicit systemd user deployment.\n"
         )
-        doc = stage / "usr/share/doc/trapi2litellm"
-        doc.mkdir(parents=True)
-        shutil.copyfile(license_path, doc / "copyright")
-        shutil.copyfile(source / "README.md", doc / "README.md")
-        shutil.copyfile(requirements, doc / "requirements.txt")
-        changelog = f"trapi2litellm ({deb_version}) unstable; urgency=medium\n\n  * Package upstream {version} with an isolated locked application environment.\n\n -- Acture <acturea@gmail.com>  Sat, 03 Oct 2026 00:00:00 +0000\n"
-        with gzip.open(doc / "changelog.Debian.gz", "wb") as handle:
-            handle.write(changelog.encode())
         destination = output / f"trapi2litellm_{deb_version}_{architecture}.deb"
         run(["dpkg-deb", "--root-owner-group", "--build", str(stage), str(destination)], work)
         shutil.copyfile(work / "shlibdeps.txt", output / f"{destination.stem}.shlibdeps.txt")
