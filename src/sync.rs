@@ -1,6 +1,6 @@
 use crate::{
 	catalog::{self, Config},
-	files,
+	files, process,
 	runtime::Runtime,
 	settings::{SERVICE, Settings},
 };
@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use std::{
 	collections::BTreeSet,
 	fs,
-	process::{Command, ExitStatus, Stdio},
+	process::Command,
 	thread,
 	time::{Duration, Instant},
 };
@@ -24,25 +24,13 @@ pub trait Service {
 }
 
 pub fn checked_command(command: &mut Command, timeout: Duration) -> Result<()> {
-	let mut child: std::process::Child = command
-		.stdin(Stdio::null())
-		.stdout(Stdio::null())
-		.stderr(Stdio::null())
-		.spawn()
-		.context("Could not start service command")?;
-	let started: Instant = Instant::now();
-	loop {
-		if let Some(status) = child.try_wait()? {
-			ensure!(status.success(), "Service command failed ({status})");
-			return Ok(());
-		}
-		if started.elapsed() >= timeout {
-			child.kill()?;
-			child.wait()?;
-			bail!("Service command timed out");
-		}
-		thread::sleep(Duration::from_millis(50));
-	}
+	let output: std::process::Output = process::run(command, &[], timeout)?;
+	ensure!(
+		output.status.success(),
+		"Service command failed ({})",
+		output.status
+	);
+	Ok(())
 }
 
 pub struct SystemService<'a> {
@@ -50,13 +38,12 @@ pub struct SystemService<'a> {
 }
 impl Service for SystemService<'_> {
 	fn active(&self) -> Result<bool> {
-		let status: ExitStatus = Command::new("systemctl")
-			.args(["--user", "is-active", "--quiet", SERVICE])
-			.stdin(Stdio::null())
-			.stdout(Stdio::null())
-			.stderr(Stdio::null())
-			.status()?;
-		Ok(status.success())
+		let output: std::process::Output = process::run(
+			Command::new("systemctl").args(["--user", "is-active", "--quiet", SERVICE]),
+			&[],
+			Duration::from_secs(15),
+		)?;
+		Ok(output.status.success())
 	}
 	fn reload(&self) -> Result<()> {
 		checked_command(

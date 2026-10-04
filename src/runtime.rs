@@ -1,13 +1,13 @@
-use crate::{catalog::Config, files, settings::Settings};
+use crate::{catalog::Config, files, process, settings::Settings};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
 	env, fmt,
-	io::Write,
 	os::unix::process::CommandExt,
 	path::{Path, PathBuf},
-	process::{Command, Stdio},
+	process::Command,
+	time::Duration,
 };
 
 pub trait Runtime {
@@ -76,20 +76,14 @@ impl PythonRuntime {
 	}
 
 	fn request<T: Serialize>(&self, operation: &str, request: &T) -> Result<Value> {
-		let mut child: std::process::Child = self
-			.command(operation)
-			.stdin(Stdio::piped())
-			.stdout(Stdio::piped())
-			.stderr(Stdio::null())
-			.spawn()
-			.context("Could not start Python runtime")?;
 		let bytes: Vec<u8> = serde_json::to_vec(request)?;
-		let write_result: std::io::Result<()> = child
-			.stdin
-			.take()
-			.context("Missing runtime stdin")?
-			.write_all(&bytes);
-		let output: std::process::Output = child.wait_with_output()?;
+		let timeout: Duration = match operation {
+			"catalog" => Duration::from_secs(60),
+			"validate" => Duration::from_secs(30),
+			_ => bail!("Unsupported Python runtime request"),
+		};
+		let output: std::process::Output =
+			process::run(&mut self.command(operation), &bytes, timeout)?;
 		if !output.status.success() {
 			let error: RuntimeError =
 				serde_json::from_slice(&output.stdout).unwrap_or(RuntimeError {
@@ -98,7 +92,6 @@ impl PythonRuntime {
 				});
 			return Err(error.into());
 		}
-		write_result?;
 		serde_json::from_slice(&output.stdout).context("Invalid JSON from Python runtime")
 	}
 

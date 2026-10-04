@@ -1,5 +1,5 @@
 use crate::{
-	catalog, files,
+	catalog, files, process,
 	runtime::Runtime,
 	settings::{SERVICE, Settings},
 	sync::{self, Service},
@@ -11,7 +11,7 @@ use std::{
 	env, fs,
 	os::unix::fs::PermissionsExt,
 	path::{Path, PathBuf},
-	process::{Command, Stdio},
+	process::Command,
 	time::Duration,
 };
 
@@ -40,17 +40,30 @@ impl Host for SystemHost {
 			fs::write(&path, content)?;
 			paths.push(path);
 		}
-		let output: std::process::Output = Command::new("systemd-analyze")
-			.args(["--user", "verify"])
-			.args(paths)
-			.stdin(Stdio::null())
-			.output()?;
+		let output: std::process::Output = process::run(
+			Command::new("systemd-analyze")
+				.args(["--user", "verify"])
+				.args(paths),
+			&[],
+			Duration::from_secs(30),
+		)?;
+		let diagnostics: String = [
+			String::from_utf8_lossy(&output.stderr).trim(),
+			String::from_utf8_lossy(&output.stdout).trim(),
+		]
+		.into_iter()
+		.filter(|part| !part.is_empty())
+		.collect::<Vec<&str>>()
+		.join("\n");
 		ensure!(
 			output.status.success()
 				&& !String::from_utf8_lossy(&output.stderr).contains("path is not absolute"),
-			"systemd unit validation failed: {}",
-			String::from_utf8_lossy(&output.stderr).trim()
+			"systemd unit validation failed ({}): {diagnostics}",
+			output.status
 		);
+		if !diagnostics.is_empty() {
+			eprintln!("INFO systemd unit validation diagnostics: {diagnostics}");
+		}
 		Ok(())
 	}
 }

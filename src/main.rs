@@ -1,6 +1,7 @@
 mod catalog;
 mod deploy;
 mod files;
+mod process;
 mod runtime;
 mod settings;
 mod sync;
