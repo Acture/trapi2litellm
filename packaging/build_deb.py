@@ -30,12 +30,12 @@ def shared_library_dependencies(stage: Path, work: Path) -> str:
     """Let dpkg derive system dependencies; bundled SONAMEs are self-dependencies."""
     objects: list[Path] = []
     for path in stage.rglob("*"):
-        if ".so" in path.name and path.is_file():
+        if path.is_file() and not path.is_symlink():
             with path.open("rb") as handle:
                 if handle.read(4) == b"\x7fELF":
                     objects.append(path)
     if not objects:
-        raise ValueError("Expected native dependency wheels in the private environment")
+        raise ValueError("Expected the native CLI and dependency wheels in the private environment")
     debian = work / "debian"
     debian.mkdir()
     (debian / "control").write_text(
@@ -145,17 +145,17 @@ def main() -> None:
             work,
         )
         run(["uv", "pip", "install", "--python", python, "--no-deps", str(wheel)], work)
-        # Other dependencies' scripts have staging shebangs. The only public
-        # executable uses the final venv interpreter and module entry instead.
+        with (venv / "bin/trapi2litellm").open("rb") as handle:
+            if handle.read(4) != b"\x7fELF":
+                raise ValueError("The package entry point must be the native Rust executable")
+        # Keep the native CLI beside its Python interpreter. Other dependency
+        # scripts have staging shebangs and are not public package commands.
         for path in (venv / "bin").iterdir():
-            if not path.name.startswith("python"):
+            if not path.name.startswith("python") and path.name != "trapi2litellm":
                 path.unlink()
         binary = stage / "usr/bin/trapi2litellm"
         binary.parent.mkdir(parents=True)
-        binary.write_text(
-            '#!/usr/bin/python3\nimport os\nimport sys\nos.execv("/opt/trapi2litellm/bin/python", ["/opt/trapi2litellm/bin/python", "-m", "trapi2litellm", *sys.argv[1:]])\n'
-        )
-        binary.chmod(0o755)
+        binary.symlink_to("/opt/trapi2litellm/bin/trapi2litellm")
         # dpkg recognizes this as one package build tree, including its
         # private libraries, only once DEBIAN exists.
         control = stage / "DEBIAN"

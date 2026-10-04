@@ -46,7 +46,7 @@ def assert_installed(config: Path, state: Path) -> None:
         [
             "/opt/trapi2litellm/bin/python",
             "-c",
-            "import azure.identity, litellm.types.router, uvicorn_worker; from trapi2litellm.sync_models import validate_config, build_config; validate_config(build_config({'data': [{'id': 'offline', 'provisioningState': 'Succeeded'}]}), None)",
+            "import azure.identity, litellm.types.router, uvicorn_worker; from trapi2litellm.runtime import validate; validate({'config': {'model_list': [{'model_name': 'trapi/offline', 'litellm_params': {'model': 'azure/offline'}}]}})",
         ],
         user=True,
     )
@@ -121,7 +121,11 @@ def main() -> None:
     digest = hashlib.sha256(key.read_bytes()).hexdigest()
     for operation in ("--remove", "--purge"):
         run(["dpkg", operation, "trapi2litellm"])
-        if Path("/usr/bin/trapi2litellm").exists() or Path("/opt/trapi2litellm").exists():
+        if (
+            Path("/usr/bin/trapi2litellm").exists()
+            or Path("/usr/bin/trapi2litellm").is_symlink()
+            or Path("/opt/trapi2litellm").exists()
+        ):
             raise AssertionError("Uninstall left package files behind")
         if (
             not (state / "retained.json").is_file()

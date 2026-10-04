@@ -1,18 +1,65 @@
 """Small live gateway checks. Sends bounded synthetic prompts, never prints keys."""
 
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import TypedDict, cast
 
 import httpx
 
-from trapi2litellm.sync_models import LOCAL_URL, SERVICE, STATE_DIR, atomic_write, local_key
+LOCAL_URL: str = "http://127.0.0.1:" + os.environ["TRAPI2LITELLM_PORT"]
+SERVICE: str = "litellm-trapi.service"
+STATE_DIR: Path = Path(os.environ["TRAPI2LITELLM_STATE_DIR"])
 
 
-def main():
+class ToolFunction(TypedDict):
+    name: str
+    arguments: str
+
+
+class ToolCall(TypedDict):
+    id: str
+    function: ToolFunction
+
+
+class ChatMessage(TypedDict, total=False):
+    content: str | None
+    tool_calls: list[ToolCall]
+
+
+class ChatChoice(TypedDict):
+    message: ChatMessage
+
+
+class ResponsePart(TypedDict):
+    type: str
+    text: str
+
+
+class ResponseItem(TypedDict):
+    content: list[ResponsePart]
+
+
+class ApiResponse(TypedDict, total=False):
+    choices: list[ChatChoice]
+    output: list[ResponseItem]
+    model: str
+    usage: dict[str, object]
+
+
+def response_text(response: ApiResponse) -> str:
+    content = response["choices"][0]["message"]["content"]
+    assert isinstance(content, str)
+    return content.strip()
+
+
+def main() -> None:
+    key: str = os.environ["LITELLM_MASTER_KEY"]
     checks = []
 
-    def record(name, **details):
+    def record(name: str, **details: object) -> None:
         item = {"check": name, "passed": True, **details}
         checks.append(item)
         print(json.dumps(item), flush=True)
@@ -26,7 +73,7 @@ def main():
             assert response.status_code == 401, (label, response.status_code)
             record(label, status=response.status_code)
 
-        client.headers["Authorization"] = "Bearer " + local_key()
+        client.headers["Authorization"] = "Bearer " + key
         for path in ["/v1/models", "/catalog", "/status", "/model/info"]:
             response = client.get(path)
             response.raise_for_status()
@@ -37,14 +84,14 @@ def main():
                 assert "trapi/gpt-5.2_2025-12-11" in {x["id"] for x in response.json()["data"]}
             record(path, status=response.status_code, **details)
 
-        def post(path, payload):
+        def post(path: str, payload: dict[str, object]) -> ApiResponse:
             response = client.post(path, json=payload)
             if not response.is_success:
                 error = response.json().get("error", {})
                 message = error.get("message", "") if isinstance(error, dict) else str(error)
-                message = message.replace(local_key(), "[REDACTED]")
+                message = message.replace(key, "[REDACTED]")
                 raise RuntimeError(f"{path}: HTTP {response.status_code}: {message[:500]}")
-            return response.json()
+            return cast(ApiResponse, response.json())
 
         data = post(
             "/v1/chat/completions",
@@ -55,7 +102,7 @@ def main():
                 "reasoning_effort": "none",
             },
         )
-        assert data["choices"][0]["message"]["content"].strip() == "OK"
+        assert response_text(data) == "OK"
         record("gpt52_chat", model=data["model"], usage=data.get("usage"))
 
         text = ""
@@ -130,7 +177,7 @@ def main():
                 "max_tokens": 32,
             },
         )
-        assert data["choices"][0]["message"]["content"].strip() == "5"
+        assert response_text(data) == "5"
         record("tool_call_roundtrip", output="5")
 
         data = post(
@@ -194,7 +241,7 @@ def main():
         record("reload_during_stream", stream_completed=done, master_pid_unchanged=True)
 
     report = {"tested_at": datetime.now(timezone.utc).isoformat(), "checks": checks}
-    atomic_write(STATE_DIR / "smoke-test.json", json.dumps(report, indent=2) + "\n")
+    (STATE_DIR / "smoke-test.json").write_text(json.dumps(report, indent=2) + "\n")
     print("All live checks passed.", flush=True)
 
 

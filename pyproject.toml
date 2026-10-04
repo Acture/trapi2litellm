@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling==1.27.0"]
-build-backend = "hatchling.build"
+requires = ["maturin==1.12.6"]
+build-backend = "maturin"
 
 [project]
 name = "trapi2litellm"
@@ -20,17 +20,24 @@ dependencies = [
   "starlette==1.6.0",
 ]
 
-[project.scripts]
-trapi2litellm = "trapi2litellm.cli:main"
-
 [project.urls]
 Repository = "https://github.com/Acture/trapi2litellm"
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/trapi2litellm"]
-
-[tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/packaging", "/README.md", "/LICENSE", "/pyproject.toml", "/uv.lock"]
+[tool.maturin]
+bindings = "bin"
+python-source = "src"
+module-name = "trapi2litellm"
+locked = true
+editable-profile = "dev"
+include = [
+  { path = "tests/**", format = "sdist" },
+  { path = "packaging/**", format = "sdist" },
+  { path = "docs/**", format = "sdist" },
+  { path = "STATUS.md", format = "sdist" },
+  { path = "uv.lock", format = "sdist" },
+  { path = "rustfmt.toml", format = "sdist" },
+]
+exclude = ["notes/**", ".superpowers/**", "experiments/**"]
 
 [dependency-groups]
 dev = ["ruff==0.15.6", "ty"]
@@ -43,4 +50,3 @@ select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/trapi2litellm/gateway_app.py" = ["E402"]
-"tests/test_sync.py" = ["E402"]

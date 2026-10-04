@@ -16,3 +16,4 @@ dist/
 *.egg-info/
 debs/
 .ty_cache/
+target/

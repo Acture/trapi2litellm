@@ -50,7 +50,16 @@ def main() -> None:
             root,
             source,
             ignore=shutil.ignore_patterns(
-                ".git", ".venv", "dist", "debs", "__pycache__", ".ruff_cache"
+                ".git",
+                ".venv",
+                "notes",
+                ".superpowers",
+                "target",
+                "dist",
+                "debs",
+                "debs-old",
+                "__pycache__",
+                ".ruff_cache",
             ),
         )
         env = {

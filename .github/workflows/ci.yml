@@ -42,7 +42,12 @@ jobs:
       - name: Lint, types and offline tests
         shell: fish {0}
         run: |
-          uv sync --frozen
+          rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt; or exit
+          rustup default 1.99.0; or exit
+          cargo fmt --check; or exit
+          cargo clippy --locked --all-targets -- -D warnings; or exit
+          cargo test --locked; or exit
+          uv sync --frozen; or exit
           uv run --frozen ruff check .; or exit
           uv run --frozen ruff format --check .; or exit
           uv run --frozen ty check; or exit
@@ -85,6 +90,8 @@ jobs:
       - name: Wheel, sdist, uvx and persistent uv tool acceptance
         shell: fish {0}
         run: |
+          rustup toolchain install 1.99.0 --profile minimal; or exit
+          rustup default 1.99.0; or exit
           mkdir -p "$RUNNER_TOOL_CACHE/trapi2litellm-acceptance"
           uv run --frozen python packaging/check_dist.py --python (uv python find 3.12) --tool-root "$RUNNER_TOOL_CACHE/trapi2litellm-acceptance"
 

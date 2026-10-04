@@ -14,9 +14,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from trapi2litellm.settings import STATE_DIR
-
-CONFIG_PATH = Path(os.environ["CONFIG_FILE_PATH"])
+CONFIG_PATH: Path = Path(os.environ["CONFIG_FILE_PATH"])
+STATE_DIR: Path = Path(os.environ["TRAPI2LITELLM_STATE_DIR"])
 CONFIG_SHA256 = hashlib.sha256(CONFIG_PATH.read_bytes()).hexdigest()
 MASTER_KEY = os.environ["LITELLM_MASTER_KEY"].encode()
 if not MASTER_KEY:

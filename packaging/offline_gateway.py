@@ -88,6 +88,11 @@ def probe(port: int) -> None:
 def check(command: list[str], work: Path) -> None:
     config, state = work / "config", work / "state"
     prepare(config, state)
+    # A local checkout/PYTHONPATH must not replace the installed runtime,
+    # including after its second exec into Gunicorn and after worker reload.
+    poison = work / "trapi2litellm"
+    poison.mkdir()
+    (poison / "__init__.py").write_text('raise RuntimeError("Imported the source fixture")\n')
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
@@ -97,6 +102,8 @@ def check(command: list[str], work: Path) -> None:
         "TRAPI2LITELLM_STATE_DIR": str(state),
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
         "LITELLM_MASTER_KEY": KEY,
+        "TRAPI2LITELLM_PYTHON": "",
+        "PYTHONPATH": str(work),
     }
     with (work / "gateway.log").open("wb") as log:
         process = subprocess.Popen(

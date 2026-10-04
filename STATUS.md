@@ -1,7 +1,44 @@
 # Distribution status
 
-Execution home: [OSS-76](https://linear.app/acturea/issue/OSS-76), formerly P-866.
-This file owns the measured packaging evidence; channel integration is P-867.
+Current execution home: [OSS-306](https://linear.app/acturea/issue/OSS-306), Rust
+control migration. Earlier Python packaging acceptance belongs to
+[OSS-76](https://linear.app/acturea/issue/OSS-76), formerly P-866.
+This file owns measured packaging evidence; channel integration is P-867.
+
+## Rust control migration (2026-10-04, macOS arm64)
+
+The native CLI owns configuration, synchronization, publication/rollback and
+systemd deployment. Python remains the Azure SDK, LiteLLM schema and gateway
+runtime. Maturin builds one platform wheel containing both; Debian staging keeps
+the native binary beside its Python environment and scans both for ELF libraries.
+
+Local source checks passed: Rust formatting, Clippy and 18 offline tests;
+Python ruff check/format, ty and 11 offline tests; actionlint and frozen lock
+validation. Subprocess tests cover deadlines, child reaping and large stdin,
+stdout and stderr. Normal synchronization rollback is covered independently.
+
+Actual local artifacts were built with the **dev** profile, not release:
+`trapi2litellm-0.1.0-py3-none-macosx_11_0_arm64.whl` and
+`trapi2litellm-0.1.0.tar.gz`. Separate temporary environments installed the
+wheel and compiled the extracted sdist. Both passed the included Python tests
+and real foreground gateway/auth/model/status/HUP probes using a synthetic
+catalog, including hostile working-directory/PYTHONPATH fixtures. The archives
+contain the native CLI, Python runtime and full license; private notes,
+experiments and agent scratch are excluded. These are local development
+artifacts, not published releases.
+
+Linux release wheels, Python 3.13 execution, native systemd deployment and the
+four Debian/Ubuntu targets have **not** been rerun for this Rust migration.
+The earlier acceptance below applies to the Python implementation only.
+Manual long-check commands are in [docs/distribution.md](docs/distribution.md).
+Rust 1.89 is the declared minimum; local checks used 1.98.1, and CI/build images
+pin 1.99.0. No minimum-toolchain execution is claimed.
+
+Explicit `deploy --start` retains the prior activation behavior: a failure after
+publishing configuration may leave the new configuration in place. Full
+deployment activation rollback is tracked separately in
+[OSS-309](https://linear.app/acturea/issue/OSS-309). Live Managed Identity,
+inference, streaming during reload and credential expiry remain untested here.
 
 ## Accepted source and artifacts (2026-10-04)
 
@@ -52,33 +89,9 @@ Debian archive submissions.
 - Source and CI artifacts are available; no tag, GitHub Release, PyPI
   publication, Homebrew formula, signed apt source or real host deployment.
 - Pull-request review and delivery links are tracked in the Linear execution home.
-- Homebrew and signed apt delivery are P-867. AGPL and packaging work retain
-  Python + LiteLLM; a Go/Rust proxy would be a separate implementation decision.
+- Homebrew and signed apt delivery are P-867.
 - Live Managed Identity, inference, streaming during reload and credential-expiry
   checks remain separate from this synthetic packaging acceptance.
-
-## Rust gateway compatibility probe (2026-10-04)
-
-The user requested an isolated evaluation without replacing LiteLLM. The
-[AISIX experiment](experiments/aisix/README.md) pins release `v1.5.0` at
-`26497758704c28f62bb9d1d763886140691a365b`. Upstream source hashes were verified;
-the unchanged Azure URL resolver/validator was compiled with Rust 1.96.1 in a
-dependency-free test crate. Only its error container was substituted.
-
-Five requirement assertions ran: one passed and four failed. TRAPI's base path
-is preserved, but the existing dotted deployment ID is rejected, the generation
-API version differs, the attempted query override is rejected, and the source
-token-audience constant differs. The last assertion checks a constant, not
-credential acquisition. Native Azure auth source inspection additionally shows
-application client credentials/API keys rather than Managed Identity.
-
-Probe code passed ruff check/format, ty, rustfmt and Cargo Clippy with warnings
-denied. This rejects the released native Azure adapter as a direct replacement;
-it does not establish full gateway behavior or rule out other adapter setups.
-No full gateway build/start, Azure authentication, token-expiry cycle or inference
-was performed. A manual full-build command is recorded in the experiment.
-Production code, dependencies and the accepted packaging source remain unchanged.
-`trapi-bridge` is only a naming proposal, awaiting a user decision.
 
 ## Runtime reuse preference (2026-10-04)
 
@@ -98,9 +111,8 @@ accepted artifact evidence are unchanged.
 
 ## Pull-request preparation checks (2026-10-04)
 
-Fresh local ruff check/format, ty, actionlint and all 38 offline regression tests
-passed. The accepted CI run was rechecked and remains successful. Since the
-accepted source, changes are limited to README/STATUS and the isolated AISIX
-experiment; application and packaging implementation files are unchanged.
-The target branch is `main`. PR checks will validate the proposed merge; the
-earlier accepted run establishes the packaging evidence recorded above.
+At PR preparation, local ruff check/format, ty, actionlint and all 38 offline
+regression tests passed. The accepted CI run was rechecked successfully, and
+application and packaging implementation files matched the accepted source.
+The target branch was `main`; the earlier accepted run establishes the
+packaging evidence recorded above.

@@ -1,6 +1,8 @@
 # trapi2litellm
 
 TRAPI model discovery and a local LiteLLM gateway, using Azure Managed Identity.
+The native Rust CLI owns synchronization and user-service deployment; the
+installed Python environment runs LiteLLM and the Azure SDK.
 One port serves the model APIs, catalog and sync status. No Azure CLI login,
 stored upstream bearer token, database, or separate catalog server is needed.
 
@@ -9,12 +11,13 @@ License: [AGPL-3.0-only](LICENSE).
 ## Install
 
 Python 3.12 and 3.13 are supported. Prefer the existing system `uv` and a
-compatible system Python. Build the wheel and sdist, then install the CLI
+compatible system Python. Building from source also requires Rust 1.89 or newer.
+Build the platform-specific wheel and sdist, then install the CLI
 persistently (the checkout is only needed to build):
 
 ```fish
 uv build --no-managed-python --no-python-downloads --python '>=3.12,<3.14'
-uv tool install --no-managed-python --no-python-downloads --python '>=3.12,<3.14' dist/trapi2litellm-0.1.0-py3-none-any.whl
+uv tool install --no-managed-python --no-python-downloads --python '>=3.12,<3.14' dist/trapi2litellm-*.whl
 trapi2litellm --help
 trapi2litellm --version
 ```
@@ -23,12 +26,14 @@ These flags reuse an existing Python rather than downloading another
 interpreter; installation fails if a compatible version is missing. `uv`
 manages an isolated, persistent environment for LiteLLM and the other application
 dependencies. Those dependencies still need to be installed. The installed
-command runs directly, without invoking `uv` on every service start.
+Rust command runs directly, without invoking `uv` on every service start.
+It locates Python beside the installed binary, including through a stable
+tool/package symlink. Installing a prebuilt wheel requires no Rust compiler.
 
 For a temporary invocation of the built artifact:
 
 ```fish
-uvx --no-managed-python --no-python-downloads --python '>=3.12,<3.14' --from ./dist/trapi2litellm-0.1.0-py3-none-any.whl trapi2litellm deploy --dry-run
+uvx --no-managed-python --no-python-downloads --python '>=3.12,<3.14' --from ./dist/trapi2litellm-*.whl trapi2litellm deploy --dry-run
 ```
 
 `uvx` can preview units or run the foreground gateway; real deployment refuses
@@ -163,6 +168,9 @@ uv run --frozen ruff check .
 uv run --frozen ruff format --check .
 uv run --frozen ty check
 uv run --frozen python -m unittest discover -s tests -v  # offline, no credentials needed
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
 trapi2litellm smoke-test                                # billable synthetic requests
 ```
 
@@ -180,62 +188,19 @@ files are application code, tests, deployment logic and dependency locks only.
 
 ## Distribution acceptance
 
-`packaging/check_dist.py` builds from a disposable copy, deletes that source,
-installs wheel and sdist separately with hashed locked dependencies, runs the
-included offline tests, probes the real foreground gateway using a synthetic
-model, and checks uvx refusal/uv tool unit paths. It does not call inference.
-
-```fish
-uv run --frozen python packaging/check_dist.py --python python3.12
-```
-
-The Debian builder runs **on the target distribution and architecture** and
-embeds locked dependencies in `/opt/trapi2litellm`. The public command is
-`/usr/bin/trapi2litellm`. It declares the matching system Python minor version
-and derives ELF shared-library dependencies with `dpkg-shlibdeps`. No package
-maintainer scripts download dependencies, authenticate, or start a service.
-The package reuses `/usr/bin/python3`: it contains application dependencies,
-not a second Python distribution or a bundled `uv`. `uv` is a build prerequisite
-only. Choose the wheel/system-uv route above for a smaller download when online
-dependency installation is acceptable; the Debian package carries its
-dependencies for offline installation.
-
-```fish
-# In a prepared Debian 13 / Ubuntu 24.04 build environment:
-python3 packaging/build_deb.py dist/trapi2litellm-0.1.0.tar.gz --out debs
-# Install the artifact built for your distro and architecture:
-sudo apt install ./debs/trapi2litellm_VERSION_ARCH.deb
-```
-
-Build prerequisites and the pinned uv builder are in `packaging/Dockerfile`.
-CI checks Debian 13 / Ubuntu 24.04 × amd64 / arm64; installation, upgrade,
-remove/purge and reinstall run with Docker networking disabled. See `STATUS.md`
-for the measured state of these checks. These are third-party application
-packages with vendored Python dependencies, not Debian archive submissions.
-
-Before uninstalling a running installation, stop its user units:
-
-```sh
-systemctl --user disable --now litellm-trapi.service litellm-trapi-sync.timer
-systemctl --user stop litellm-trapi-sync.service
-```
-
-Remove the three generated units from `~/.config/systemd/user` and run
-`systemctl --user daemon-reload`, then uninstall the tool/package. User keys,
-configuration and state are retained by package removal and purge. Upgrading a
-package leaves a running gateway on its current workers; run `deploy --start`
-to validate the new installation and restart it.
+See [distribution and acceptance](docs/distribution.md) for wheel/sdist checks,
+Debian/Ubuntu package builds, and upgrade/removal instructions. Measured
+acceptance evidence remains in [STATUS.md](STATUS.md).
 
 ## Source layout
 
-- `src/trapi2litellm/cli.py`: installed command with lazy subcommands
-- `src/trapi2litellm/server.py`: foreground Gunicorn entry point
-- `src/trapi2litellm/sync_models.py`: discovery, config validation and publication
+- `src/*.rs`: native CLI, immutable settings, catalog policy, sync and user-service deployment
+- `src/trapi2litellm/runtime.py`: internal Azure SDK/schema boundary and Gunicorn entry
 - `src/trapi2litellm/gateway_app.py`: ASGI key gate, catalog and status routes
-- `src/trapi2litellm/settings.py`: XDG paths and upstream settings
-- `src/trapi2litellm/deploy.py`: user-service units, client setup and installation
 - `tests/`: offline regression tests
 - `packaging/`: artifact builders and distribution acceptance
+- `docs/`: public documentation
+- `notes/`: optional private project-notes submodule; not required to build or run
 - `src/trapi2litellm/smoke_test.py`: bounded billable live acceptance checks
 
 LiteLLM and Azure Identity implement the model protocols and credential refresh;
