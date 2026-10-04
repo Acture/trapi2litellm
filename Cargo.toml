@@ -1,0 +1,21 @@
+[package]
+name = "trapi2litellm"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "AGPL-3.0-only"
+description = "Managed-identity TRAPI discovery and a loopback LiteLLM gateway"
+repository = "https://github.com/Acture/trapi2litellm"
+
+[dependencies]
+anyhow = "=1.0.102"
+chrono = { version = "=0.4.44", default-features = false, features = ["clock"] }
+clap = { version = "=4.5.60", features = ["derive"] }
+libc = "0.2.189"
+rand = "=0.8.5"
+reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "json"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+sha2 = "=0.10.9"
+tempfile = "=3.26.0"
+url = "=2.5.8"
