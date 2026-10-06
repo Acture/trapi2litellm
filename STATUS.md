@@ -5,6 +5,34 @@ control migration. Earlier Python packaging acceptance belongs to
 [OSS-76](https://linear.app/acturea/issue/OSS-76), formerly P-866.
 This file owns measured packaging evidence; channel integration is P-867.
 
+## Final source acceptance (2026-10-07)
+
+Final functional source: `39e297a4487f583b56bdccd111e75133afd0c211`, pushed to
+`main`. Its [CI run 37496965153](https://github.com/Acture/trapi2litellm/actions/runs/37496965153)
+completed successfully with all nine jobs passing. This ledger-only update
+does not change that accepted functional source or rebuild its artifacts.
+
+| Target | Verified behavior |
+| --- | --- |
+| Rust 1.89 | Locked compilation of all targets with the declared minimum compiler |
+| Python 3.12 and 3.13 | Rust fmt/Clippy and 23 tests; Python ruff/format/ty and 16 offline tests; wheel/sdist builds |
+| Ubuntu amd64 and arm64 | Independent installed wheel/sdist, uvx refusal, persistent uv tool, real systemd startup/HUP and first-deployment/redeployment rollback |
+| Debian 13 and Ubuntu 24.04 × amd64 and arm64 | Native package build; network-disabled install, upgrade/restart, remove, purge and reinstall |
+
+GitHub's artifact API verified five uploaded bundles (`python-dist` and
+`deb-0` through `deb-3`) present and unexpired at acceptance; their reported
+expiry is 2027-01-04. These are CI artifacts, not published package releases.
+
+The real-systemd rollback test is ignored in source-test jobs and explicitly
+run during installed-distribution acceptance on both architectures. Offline
+contract tests cover API-key rejection, SSE delivery before upstream completion,
+separate deployment/sync status and current SDK-supplied catalog tokens.
+
+The last guard rejects active configuration/state-directory or port changes
+before publishing deployment files. Local Rust fmt/Clippy and the four deployment
+transaction tests passed. No Azure runner is required; live Azure authentication,
+inference and credential-expiry recovery remain optional manual acceptance.
+
 ## Rust control migration (2026-10-04, macOS arm64)
 
 The native CLI owns configuration, synchronization, publication/rollback and
@@ -38,8 +66,8 @@ Verified artifact source: `5dac34c51ec9dddd8320e6822640fd4e47d50169` on the loca
 | macOS arm64 dev wheel | `717b1b40e0bb83ca15081a01dbad8d7d72d912408c9188f8fd9ba2748ac62167` |
 | sdist | `d81f95348d47f9676b7743c024dc2118fcb72656c249517568cbc940826004ab` |
 
-Debian now includes the public distribution guide and STATUS beside README;
-its native installation remains part of the pending Linux acceptance.
+Debian includes the public distribution guide and STATUS beside README;
+native installation acceptance is established by the later Linux runs below.
 
 The Rust migration was pushed to `main` on 2026-10-06 at `eed591d`.
 [CI run 37471382076](https://github.com/Acture/trapi2litellm/actions/runs/37471382076)
@@ -57,8 +85,8 @@ backslashes/glob characters as well as percent specifiers, and the persistent
 tool fixture exercises these characters in a real service path.
 Local deployment regression tests (3), including a real POSIX glob check that
 selects the literal key file while excluding a matching decoy,
-Rust fmt/Clippy and Python ruff/format/ty checks passed. Linux systemd and
-Debian lifecycle acceptance for this fix remains pending CI.
+Rust fmt/Clippy and Python ruff/format/ty checks passed. The later Linux run
+below establishes systemd and Debian lifecycle acceptance for this fix.
 
 The `d590294` CI rerun
 [37487261765](https://github.com/Acture/trapi2litellm/actions/runs/37487261765)
@@ -132,7 +160,8 @@ do not establish real Azure authentication or token-expiry recovery. All nine
 jobs passed at `13a591e3eacee00b4ed76a77a58384af371c9a7f` in
 [CI run 37494655083](https://github.com/Acture/trapi2litellm/actions/runs/37494655083).
 The subsequent active state-directory guard passed local Rust fmt/Clippy and
-the four deployment transaction tests; its Linux CI acceptance remains pending.
+the four deployment transaction tests, followed by complete Linux acceptance
+at the final functional source recorded above.
 
 ## Accepted source and artifacts (2026-10-04)
 
