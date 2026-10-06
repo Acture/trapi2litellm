@@ -60,6 +60,14 @@ selects the literal key file while excluding a matching decoy,
 Rust fmt/Clippy and Python ruff/format/ty checks passed. Linux systemd and
 Debian lifecycle acceptance for this fix remains pending CI.
 
+The `d590294` CI rerun
+[37487261765](https://github.com/Acture/trapi2litellm/actions/runs/37487261765)
+passed the literal-path glob regression, but Python 3.12's Rust runtime protocol
+fixture intermittently failed with `ETXTBSY` while executing a newly written
+script, preventing distribution jobs from running. The fixture now exercises
+the same JSON subprocess boundary through `/bin/sh -c`, without executing a
+freshly writable fixture inode. No subprocess retry policy was added.
+
 Manual long-check commands are in [docs/distribution.md](docs/distribution.md).
 Rust 1.89 is the declared minimum; local checks used 1.98.1, and CI/build images
 pin 1.99.0. No minimum-toolchain execution is claimed.

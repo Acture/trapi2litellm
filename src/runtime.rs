@@ -28,6 +28,23 @@ impl fmt::Display for RuntimeError {
 }
 impl std::error::Error for RuntimeError {}
 
+fn json_request<T: Serialize>(
+	command: &mut Command,
+	request: &T,
+	timeout: Duration,
+) -> Result<Value> {
+	let bytes: Vec<u8> = serde_json::to_vec(request)?;
+	let output: std::process::Output = process::run(command, &bytes, timeout)?;
+	if !output.status.success() {
+		let error: RuntimeError = serde_json::from_slice(&output.stdout).unwrap_or(RuntimeError {
+			error_type: "RuntimeProtocolError".into(),
+			http_status: None,
+		});
+		return Err(error.into());
+	}
+	serde_json::from_slice(&output.stdout).context("Invalid JSON from Python runtime")
+}
+
 pub struct PythonRuntime {
 	pub python: PathBuf,
 	isolated: bool,
@@ -76,23 +93,12 @@ impl PythonRuntime {
 	}
 
 	fn request<T: Serialize>(&self, operation: &str, request: &T) -> Result<Value> {
-		let bytes: Vec<u8> = serde_json::to_vec(request)?;
 		let timeout: Duration = match operation {
 			"catalog" => Duration::from_secs(60),
 			"validate" => Duration::from_secs(30),
 			_ => bail!("Unsupported Python runtime request"),
 		};
-		let output: std::process::Output =
-			process::run(&mut self.command(operation), &bytes, timeout)?;
-		if !output.status.success() {
-			let error: RuntimeError =
-				serde_json::from_slice(&output.stdout).unwrap_or(RuntimeError {
-					error_type: "RuntimeProtocolError".into(),
-					http_status: None,
-				});
-			return Err(error.into());
-		}
-		serde_json::from_slice(&output.stdout).context("Invalid JSON from Python runtime")
+		json_request(&mut self.command(operation), request, timeout)
 	}
 
 	pub fn exec(&self, operation: &str, settings: &Settings) -> Result<()> {
@@ -178,54 +184,64 @@ impl Runtime for PythonRuntime {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use std::{
-		fs,
-		os::unix::fs::{PermissionsExt, symlink},
-	};
+	use std::{fs, os::unix::fs::symlink};
 
-	fn mock_python(root: &Path, response: &str, status: u8) -> PythonRuntime {
-		let path: PathBuf = root.join("python");
+	fn mock_command(root: &Path, response: &str, status: u8) -> Command {
 		let script: String = format!(
-			"#!/bin/sh\ncat > \"${{0%/*}}/input.json\"\nprintf '%s' '{response}'\nprintf '%s' 'token-secret-sentinel' >&2\nexit {status}\n"
+			"cat > '{}/input.json'\nprintf '%s' '{response}'\nprintf '%s' 'token-secret-sentinel' >&2\nexit {status}\n",
+			root.display()
 		);
-		fs::write(&path, script).unwrap();
-		fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
-		PythonRuntime {
-			python: path,
-			isolated: false,
-		}
+		let mut command: Command = Command::new("/bin/sh");
+		command.args(["-c", &script]);
+		command
 	}
 
 	#[test]
 	fn json_protocol_and_sanitized_errors() {
 		let root: tempfile::TempDir = tempfile::tempdir().unwrap();
 		let settings: Settings = crate::settings::test_settings(root.path());
-		let runtime: PythonRuntime = mock_python(root.path(), "{\"data\":[]}", 0);
+		let mut command: Command = mock_command(root.path(), "{\"data\":[]}", 0);
+		let request: CatalogRequest<'_> = CatalogRequest {
+			base_url: &settings.base_url,
+			catalog_version: &settings.catalog_version,
+			scope: &settings.scope,
+			client_id: &settings.client_id,
+		};
 		assert_eq!(
-			runtime.catalog(&settings).unwrap(),
+			json_request(&mut command, &request, Duration::from_secs(5)).unwrap(),
 			serde_json::json!({"data": []})
 		);
 		let request: Value =
 			serde_json::from_slice(&fs::read(root.path().join("input.json")).unwrap()).unwrap();
 		assert_eq!(request["base_url"], settings.base_url);
 		assert_eq!(request["catalog_version"], settings.catalog_version);
-		let runtime: PythonRuntime =
-			mock_python(root.path(), "{\"previous_models\":[\"trapi/old\"]}", 0);
+		let mut command: Command =
+			mock_command(root.path(), "{\"previous_models\":[\"trapi/old\"]}", 0);
 		let config: Config =
 			crate::catalog::build_config(&crate::catalog::catalog(&["a"]), &settings).unwrap();
-		assert_eq!(
-			runtime.validate(&config, Some("old YAML")).unwrap(),
-			vec!["trapi/old"]
-		);
+		let response: ValidationResponse = serde_json::from_value(
+			json_request(
+				&mut command,
+				&ValidationRequest {
+					config: &config,
+					previous_text: Some("old YAML"),
+				},
+				Duration::from_secs(5),
+			)
+			.unwrap(),
+		)
+		.unwrap();
+		assert_eq!(response.previous_models, vec!["trapi/old"]);
 		let request: Value =
 			serde_json::from_slice(&fs::read(root.path().join("input.json")).unwrap()).unwrap();
 		assert_eq!(request["previous_text"], "old YAML");
-		let runtime: PythonRuntime = mock_python(
+		let mut command: Command = mock_command(
 			root.path(),
 			"{\"error_type\":\"HttpResponseError\",\"http_status\":403}",
 			1,
 		);
-		let error: anyhow::Error = runtime.catalog(&settings).unwrap_err();
+		let error: anyhow::Error =
+			json_request(&mut command, &serde_json::json!({}), Duration::from_secs(5)).unwrap_err();
 		assert_eq!(
 			error.downcast_ref::<RuntimeError>().unwrap().http_status,
 			Some(403)
