@@ -144,9 +144,9 @@ def main() -> None:
         if args.tool_root:
             # PrivateTmp deliberately hides /tmp from the generated service.
             # Exercise systemd's raw EnvironmentFile path parsing, including
-            # whitespace, specifiers and characters that quoted values escape.
+            # whitespace, specifiers, backslashes and literal glob characters.
             tool_env["TRAPI2LITELLM_CONFIG_DIR"] = str(
-                tool_root / "runtime" / 'config space%u"\\$HOME'
+                tool_root / "runtime" / 'config space%u"\\$HOME*?[x]'
             )
             tool_env["TRAPI2LITELLM_STATE_DIR"] = str(tool_root / "runtime/state")
         run(

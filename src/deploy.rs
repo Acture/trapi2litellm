@@ -91,8 +91,14 @@ fn unit_env_file(path: &Path) -> Result<String> {
 		!value.chars().any(char::is_control),
 		"Control characters are not supported in service settings"
 	);
-	// EnvironmentFile consumes one raw filename, expanding only unit specifiers.
-	Ok(value.replace('%', "%%"))
+	// EnvironmentFile expands unit specifiers and then globs a raw filename.
+	Ok(value
+		.replace('\\', "\\\\")
+		.replace('*', "\\*")
+		.replace('?', "\\?")
+		.replace('[', "\\[")
+		.replace(']', "\\]")
+		.replace('%', "%%"))
 }
 
 pub fn render_units(entry: &Path, settings: &Settings) -> Result<BTreeMap<String, String>> {
@@ -452,7 +458,7 @@ mod tests {
 		assert!(unit_env_file(Path::new("/tmp/a\nEnvironmentFile=oops")).is_err());
 		let root: tempfile::TempDir = tempfile::tempdir().unwrap();
 		let mut settings: Settings = crate::settings::test_settings(root.path());
-		settings.config_dir = root.path().join("config space%u\"\\$HOME");
+		settings.config_dir = root.path().join("config space%u\"\\$HOME*?[x]");
 		let units: BTreeMap<String, String> =
 			render_units(Path::new("/opt/$gateway/bin/trapi2litellm"), &settings).unwrap();
 		assert_eq!(units.len(), 3);
@@ -461,7 +467,7 @@ mod tests {
 		assert!(gateway.contains("serve --port 4000"));
 		assert!(gateway.contains("ExecReload=/bin/kill -HUP $MAINPID"));
 		assert!(gateway.contains(&format!(
-			"EnvironmentFile={}/config space%%u\"\\$HOME/gateway.env\n",
+			"EnvironmentFile={}/config space%%u\"\\\\$HOME\\*\\?\\[x\\]/gateway.env\n",
 			root.path().display()
 		)));
 		assert!(!gateway.contains("LITELLM_MASTER_KEY="));
@@ -471,6 +477,38 @@ mod tests {
 			assert!(content.contains("127.0.0.1:4000/v1"));
 			assert!(!content.contains("sk-trapi-"));
 		}
+	}
+	#[test]
+	fn environment_file_glob_selects_only_literal_key() {
+		let root: tempfile::TempDir = tempfile::tempdir().unwrap();
+		let key: PathBuf = root.path().join("config [xy]*?\\%u/gateway.env");
+		let decoy: PathBuf = root.path().join("config xa%u/gateway.env");
+		for path in [&key, &decoy] {
+			fs::create_dir_all(path.parent().unwrap()).unwrap();
+			fs::write(path, "LITELLM_MASTER_KEY=fixture\n").unwrap();
+		}
+		// systemd expands percent specifiers before calling POSIX glob().
+		let pattern: std::ffi::CString =
+			std::ffi::CString::new(unit_env_file(&key).unwrap().replace("%%", "%")).unwrap();
+		// glob() initializes this zeroed output; pattern remains alive throughout.
+		let mut paths: libc::glob_t = unsafe { std::mem::zeroed() };
+		let result: i32 = unsafe { libc::glob(pattern.as_ptr(), 0, None, &mut paths) };
+		let selected: Vec<PathBuf> = if result == 0 {
+			(0..paths.gl_pathc)
+				.map(|index| {
+					// A successful glob() provides gl_pathc valid, NUL-terminated strings.
+					let path: &std::ffi::CStr =
+						unsafe { std::ffi::CStr::from_ptr(*paths.gl_pathv.add(index)) };
+					PathBuf::from(path.to_str().unwrap())
+				})
+				.collect()
+		} else {
+			Vec::new()
+		};
+		// globfree() accepts the initialized output even when glob() fails.
+		unsafe { libc::globfree(&mut paths) };
+		assert_eq!(result, 0);
+		assert_eq!(selected, vec![key]);
 	}
 	#[test]
 	fn ownership_noop_and_backup() {

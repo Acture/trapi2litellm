@@ -49,9 +49,14 @@ Both installed-distribution jobs failed at systemd preflight: quoted
 Debian lifecycle jobs were skipped. This does not establish Linux package
 acceptance; the earlier acceptance below applies to the Python implementation.
 
-The follow-up uses a raw `EnvironmentFile` filename with literal percent
-escaping and exercises spaces, quotes, backslashes and percent characters in
-the persistent tool service fixture. Local deployment regression tests (2),
+The first follow-up, `0c96654`, passed systemd preflight in
+[CI run 37476599165](https://github.com/Acture/trapi2litellm/actions/runs/37476599165),
+but both service startup checks failed to load the key file: systemd's loader
+also interprets backslashes and glob patterns. The next fix escapes literal
+backslashes/glob characters as well as percent specifiers, and the persistent
+tool fixture exercises these characters in a real service path.
+Local deployment regression tests (3), including a real POSIX glob check that
+selects the literal key file while excluding a matching decoy,
 Rust fmt/Clippy and Python ruff/format/ty checks passed. Linux systemd and
 Debian lifecycle acceptance for this fix remains pending CI.
 
