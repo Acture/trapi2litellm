@@ -41,9 +41,20 @@ Verified artifact source: `5dac34c51ec9dddd8320e6822640fd4e47d50169` on the loca
 Debian now includes the public distribution guide and STATUS beside README;
 its native installation remains part of the pending Linux acceptance.
 
-Linux release wheels, Python 3.13 execution, native systemd deployment and the
-four Debian/Ubuntu targets have **not** been rerun for this Rust migration.
-The earlier acceptance below applies to the Python implementation only.
+The Rust migration was pushed to `main` on 2026-10-06 at `eed591d`.
+[CI run 37471382076](https://github.com/Acture/trapi2litellm/actions/runs/37471382076)
+passed the Python 3.12/3.13 source checks, offline tests and distribution builds.
+Both installed-distribution jobs failed at systemd preflight: quoted
+`EnvironmentFile` filenames were interpreted as non-absolute paths. The four
+Debian lifecycle jobs were skipped. This does not establish Linux package
+acceptance; the earlier acceptance below applies to the Python implementation.
+
+The follow-up uses a raw `EnvironmentFile` filename with literal percent
+escaping and exercises spaces, quotes, backslashes and percent characters in
+the persistent tool service fixture. Local deployment regression tests (2),
+Rust fmt/Clippy and Python ruff/format/ty checks passed. Linux systemd and
+Debian lifecycle acceptance for this fix remains pending CI.
+
 Manual long-check commands are in [docs/distribution.md](docs/distribution.md).
 Rust 1.89 is the declared minimum; local checks used 1.98.1, and CI/build images
 pin 1.99.0. No minimum-toolchain execution is claimed.
@@ -53,6 +64,8 @@ publishing configuration may leave the new configuration in place. Full
 deployment activation rollback is tracked separately in
 [OSS-309](https://linear.app/acturea/issue/OSS-309). Live Managed Identity,
 inference, streaming during reload and credential expiry remain untested here.
+Regular CI uses offline fixtures on GitHub-hosted runners. No Azure runner is
+required; real Azure acceptance is optional manual work in an existing environment.
 
 ## Accepted source and artifacts (2026-10-04)
 

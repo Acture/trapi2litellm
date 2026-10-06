@@ -82,6 +82,19 @@ pub fn unit_quote(value: &str) -> Result<String> {
 	))
 }
 
+fn unit_env_file(path: &Path) -> Result<String> {
+	let value: &str = path
+		.to_str()
+		.context("EnvironmentFile path must be UTF-8")?;
+	ensure!(path.is_absolute(), "EnvironmentFile path must be absolute");
+	ensure!(
+		!value.chars().any(char::is_control),
+		"Control characters are not supported in service settings"
+	);
+	// EnvironmentFile consumes one raw filename, expanding only unit specifiers.
+	Ok(value.replace('%', "%%"))
+}
+
 pub fn render_units(entry: &Path, settings: &Settings) -> Result<BTreeMap<String, String>> {
 	let command: String = unit_quote(&entry.to_string_lossy())?.replace('$', "$$");
 	let mut environment: BTreeMap<String, String> = settings.environment();
@@ -105,7 +118,7 @@ pub fn render_units(entry: &Path, settings: &Settings) -> Result<BTreeMap<String
 		.collect::<Result<Vec<String>>>()?
 		.concat()
 		+ "UnsetEnvironment=TRAPI2LITELLM_PYTHON PYTHONPATH PYTHONHOME\n";
-	let key_file: String = unit_quote(&settings.key_path().to_string_lossy())?;
+	let key_file: String = unit_env_file(&settings.key_path())?;
 	let config: String = unit_quote(&format!(
 		"CONFIG_FILE_PATH={}",
 		settings.config_path().display()
@@ -435,8 +448,11 @@ mod tests {
 	fn escaping_and_rendering() {
 		assert_eq!(unit_quote("/a b/%u").unwrap(), "\"/a b/%%u\"");
 		assert!(unit_quote("/tmp/a\nExecStart=oops").is_err());
+		assert!(unit_env_file(Path::new("relative/gateway.env")).is_err());
+		assert!(unit_env_file(Path::new("/tmp/a\nEnvironmentFile=oops")).is_err());
 		let root: tempfile::TempDir = tempfile::tempdir().unwrap();
-		let settings: Settings = crate::settings::test_settings(root.path());
+		let mut settings: Settings = crate::settings::test_settings(root.path());
+		settings.config_dir = root.path().join("config space%u\"\\$HOME");
 		let units: BTreeMap<String, String> =
 			render_units(Path::new("/opt/$gateway/bin/trapi2litellm"), &settings).unwrap();
 		assert_eq!(units.len(), 3);
@@ -444,6 +460,10 @@ mod tests {
 		assert!(gateway.contains("/opt/$$gateway/bin/trapi2litellm"));
 		assert!(gateway.contains("serve --port 4000"));
 		assert!(gateway.contains("ExecReload=/bin/kill -HUP $MAINPID"));
+		assert!(gateway.contains(&format!(
+			"EnvironmentFile={}/config space%%u\"\\$HOME/gateway.env\n",
+			root.path().display()
+		)));
 		assert!(!gateway.contains("LITELLM_MASTER_KEY="));
 		assert!(!gateway.contains("WorkingDirectory"));
 		for content in client_files(&settings).values() {

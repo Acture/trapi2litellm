@@ -63,6 +63,14 @@ The workflow in `.github/workflows/ci.yml` includes native arm64 and amd64
 builders and offline Debian lifecycle checks. Consult STATUS for which checks
 have actually run against the current migration.
 
+## Live Azure acceptance
+
+Regular CI uses GitHub-hosted runners and offline fixtures; it does not require
+an Azure runner or Managed Identity. Mocked tests and synthetic gateway checks
+cannot establish real Azure authentication, inference or credential refresh.
+These remain optional manual acceptance in an existing Azure environment,
+recorded separately from the packaging CI result.
+
 ## Upgrade and removal
 
 Before uninstalling a running installation, stop its user units:
