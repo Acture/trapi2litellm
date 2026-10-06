@@ -100,8 +100,8 @@ retry. Rejected configurations and `.previous` backups are retained.
 `rolled_back` or `rollback_failed` and the failing stage separately from sync
 history. Recovery errors are reported instead of claiming successful rollback.
 This handles command failures, not abrupt process termination. Stop an active
-gateway before changing its configuration directory or port so that rollback
-has a known readiness endpoint, or when replacing an older unit layout that
+gateway before changing its configuration/state directories or port so that
+rollback has a known readiness endpoint, or when replacing an older unit layout that
 does not record those settings in the generated form. A newly enabled linger setting is undone on
 failure; an existing linger setting is retained.
 

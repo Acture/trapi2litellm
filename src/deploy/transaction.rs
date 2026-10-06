@@ -110,13 +110,21 @@ impl DeploymentSnapshot {
 					settings.config_path().display()
 				))?
 			);
+			let state_line: String = format!(
+				"Environment={}",
+				unit_quote(&format!(
+					"TRAPI2LITELLM_STATE_DIR={}",
+					settings.state_dir.display()
+				))?
+			);
 			ensure!(
 				old_unit.lines().any(|line| line == config_line)
+					&& old_unit.lines().any(|line| line == state_line)
 					&& old_unit.lines().any(|line| {
 						line.starts_with("ExecStart=")
 							&& line.ends_with(&format!(" serve --port {}", settings.port))
 					}),
-				"Stop the gateway before changing its configuration directory or port"
+				"Stop the gateway before changing its configuration/state directories or port"
 			);
 		}
 		Ok(snapshot)
@@ -715,12 +723,12 @@ mod tests {
 			&runtime, &service, &host, &settings, &options, &units, &clients,
 		)?;
 		let previous: Vec<u8> = fs::read(settings.config_path())?;
-		for change_port in [false, true] {
+		for change in ["config", "state", "port"] {
 			let mut changed: Settings = settings.clone();
-			if change_port {
-				changed.port += 1;
-			} else {
-				changed.config_dir = root.path().join("different-config");
+			match change {
+				"port" => changed.port += 1,
+				"state" => changed.state_dir = root.path().join("different-state"),
+				_ => changed.config_dir = root.path().join("different-config"),
 			}
 			let outcome: Result<()> = apply_deployment(
 				&runtime,

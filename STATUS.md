@@ -82,7 +82,7 @@ pin 1.99.0. The dedicated minimum-compiler job passed `cargo +1.89.0 check
 
 Deployment activation rollback is tracked in
 [OSS-309](https://linear.app/acturea/issue/OSS-309); the follow-up below implements
-it, with real Linux acceptance pending. Live Managed Identity, inference,
+it and passed real Linux acceptance. Live Managed Identity, inference,
 streaming during reload and credential expiry remain untested here.
 Regular CI uses offline fixtures on GitHub-hosted runners. No Azure runner is
 required; real Azure acceptance is optional manual work in an existing environment.
@@ -120,16 +120,19 @@ targets and the declared minimum Rust compiler.
 
 `deployment-status.json` records the attempt independently from restored sync
 history and is exposed under `/status`. Abrupt process termination is outside
-this command-failure recovery. Active gateway port/configuration-directory
-changes or incompatible old unit layouts are rejected before publication;
+this command-failure recovery. Active gateway configuration/state-directory or
+port changes, and incompatible old unit layouts, are rejected before publication;
 stop the gateway first for those changes.
 
 The final offline contract follow-up adds auth rejection before upstream
 execution, SSE frame delivery before upstream completion, deployment/sync status
 separation and current SDK-supplied catalog tokens across successive requests.
 Local Python verification passed 16 tests with ruff/format/ty; these mocks
-do not establish real Azure authentication or token-expiry recovery. The new
-contract tests have not yet run in CI.
+do not establish real Azure authentication or token-expiry recovery. All nine
+jobs passed at `13a591e3eacee00b4ed76a77a58384af371c9a7f` in
+[CI run 37494655083](https://github.com/Acture/trapi2litellm/actions/runs/37494655083).
+The subsequent active state-directory guard passed local Rust fmt/Clippy and
+the four deployment transaction tests; its Linux CI acceptance remains pending.
 
 ## Accepted source and artifacts (2026-10-04)
 
