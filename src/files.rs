@@ -63,11 +63,15 @@ pub fn local_key(path: &Path) -> Result<String> {
 		.context("gateway.env has no local master key")
 }
 
-pub fn sync_lock(path: &Path) -> Result<File> {
+pub struct SyncLock {
+	_file: File,
+}
+
+pub fn sync_lock(path: &Path) -> Result<SyncLock> {
 	let file: File = OpenOptions::new().create(true).append(true).open(path)?;
 	file.set_permissions(Permissions::from_mode(0o600))?;
 	file.lock()?;
-	Ok(file)
+	Ok(SyncLock { _file: file })
 }
 
 #[cfg(test)]

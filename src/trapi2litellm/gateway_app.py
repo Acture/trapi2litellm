@@ -40,7 +40,7 @@ async def status(request: Request) -> JSONResponse:
         "config_sha256": CONFIG_SHA256,
         "authentication": "managed_identity",
     }
-    for name in ("sync-status", "sync-error"):
+    for name in ("sync-status", "sync-error", "deployment-status"):
         path = STATE_DIR / (name + ".json")
         if path.exists():
             result[name] = json.loads(path.read_text())

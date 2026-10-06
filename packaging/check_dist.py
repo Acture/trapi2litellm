@@ -181,6 +181,20 @@ def main() -> None:
                     print(rejected.stderr, file=sys.stderr)
                 rejected.check_returncode()
                 run([args.python, str(root / "packaging/check_systemd.py")], cwd=work, env=tool_env)
+                run(
+                    [
+                        "cargo",
+                        "test",
+                        "--locked",
+                        "--offline",
+                        "deploy::transaction::tests::systemd_activation_rollback",
+                        "--",
+                        "--ignored",
+                        "--exact",
+                    ],
+                    cwd=root,
+                    env={**tool_env, "TRAPI2LITELLM_ACCEPTANCE_ENTRY": command},
+                )
             elif "non-persistent" in rejected.stderr:
                 raise AssertionError(rejected.stderr)
         LOG.info("Accepted installed wheel/sdist, uvx refusal and uv tool entry")

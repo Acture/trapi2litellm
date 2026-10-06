@@ -1,11 +1,13 @@
+mod transaction;
+
 use crate::{
-	catalog, files, process,
+	files, process,
 	runtime::Runtime,
 	settings::{SERVICE, Settings},
 	sync::{self, Service},
 };
 use anyhow::{Context, Result, bail, ensure};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
 	collections::BTreeMap,
 	env, fs,
@@ -21,7 +23,52 @@ const REMEDY: &str = "Install persistently with uv tool install, Homebrew or the
 pub trait Host {
 	fn run(&self, program: &str, arguments: &[String]) -> Result<()>;
 	fn preflight(&self, units: &BTreeMap<String, String>) -> Result<()>;
+	fn unit_state(&self, name: &str) -> Result<UnitState>;
+	fn linger_enabled(&self) -> Result<bool>;
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum Enablement {
+	#[default]
+	Disabled,
+	Persistent,
+	Runtime,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct UnitState {
+	active: bool,
+	enablement: Enablement,
+}
+
+impl UnitState {
+	fn parse(output: &str) -> Result<Self> {
+		let properties: BTreeMap<&str, &str> = output
+			.lines()
+			.filter_map(|line| line.split_once('='))
+			.collect();
+		ensure!(
+			matches!(properties.get("LoadState"), Some(&"loaded" | &"not-found")),
+			"Cannot snapshot a missing, masked or invalid service-manager response"
+		);
+		let active: bool = match properties.get("ActiveState") {
+			Some(&"active" | &"reloading") => true,
+			Some(&"inactive" | &"failed") => false,
+			_ => bail!("Cannot deploy while a service is changing activation state"),
+		};
+		let enablement: Enablement = match properties.get("UnitFileState") {
+			Some(&"enabled") => Enablement::Persistent,
+			Some(&"enabled-runtime") => Enablement::Runtime,
+			Some(&"" | &"disabled" | &"static" | &"indirect") => Enablement::Disabled,
+			_ => bail!("Unsupported unit enablement state; existing deployment kept"),
+		};
+		Ok(Self { active, enablement })
+	}
+}
+
+const TIMER: &str = "litellm-trapi-sync.timer";
+const SYNC_SERVICE: &str = "litellm-trapi-sync.service";
+
 pub struct SystemHost;
 impl Host for SystemHost {
 	fn run(&self, program: &str, arguments: &[String]) -> Result<()> {
@@ -65,6 +112,48 @@ impl Host for SystemHost {
 			eprintln!("INFO systemd unit validation diagnostics: {diagnostics}");
 		}
 		Ok(())
+	}
+	fn unit_state(&self, name: &str) -> Result<UnitState> {
+		let output: std::process::Output = process::run(
+			Command::new("systemctl").args([
+				"--user",
+				"show",
+				"--property=LoadState,ActiveState,UnitFileState",
+				name,
+			]),
+			&[],
+			Duration::from_secs(15),
+		)?;
+		let properties: String = String::from_utf8(output.stdout)?;
+		ensure!(
+			output.status.success() || properties.lines().any(|line| line == "LoadState=not-found"),
+			"Could not inspect service state ({})",
+			output.status
+		);
+		UnitState::parse(&properties)
+	}
+	fn linger_enabled(&self) -> Result<bool> {
+		// getuid has no pointer arguments or failure mode.
+		let uid: u32 = unsafe { libc::getuid() };
+		let output: std::process::Output = process::run(
+			Command::new("loginctl").args([
+				"show-user",
+				&uid.to_string(),
+				"--property=Linger",
+				"--value",
+			]),
+			&[],
+			Duration::from_secs(15),
+		)?;
+		ensure!(
+			output.status.success(),
+			"Could not inspect user linger state"
+		);
+		match String::from_utf8(output.stdout)?.trim() {
+			"yes" => Ok(true),
+			"no" => Ok(false),
+			_ => bail!("Invalid user linger state"),
+		}
 	}
 }
 
@@ -397,54 +486,7 @@ pub fn deploy(
 		check_managed(&settings.config_dir.join(name), content, false)?;
 	}
 	host.preflight(&units)?;
-	fs::create_dir_all(&unit_dir)?;
-	files::private_directory(&settings.config_dir)?;
-	let mut gateway_changed: bool = false;
-	for (name, content) in &units {
-		let changed: bool = managed_write(&unit_dir.join(name), content, true)?;
-		gateway_changed |= changed && name == SERVICE;
-	}
-	for (name, content) in &clients {
-		managed_write(&settings.config_dir.join(name), content, false)?;
-	}
-	host.run("systemctl", &["--user".into(), "daemon-reload".into()])?;
-	if !options.start {
-		println!(
-			"Installed units only. To bootstrap and start: trapi2litellm deploy --start (with the same settings)"
-		);
-		return Ok(());
-	}
-	let result: sync::SyncResult = sync::synchronize(runtime, service, settings, true, true)?;
-	if options.enable_linger {
-		// getuid has no pointer arguments or failure mode.
-		let uid: u32 = unsafe { libc::getuid() };
-		host.run("loginctl", &["enable-linger".into(), uid.to_string()])?;
-	}
-	host.run(
-		"systemctl",
-		&[
-			"--user".into(),
-			"enable".into(),
-			"--now".into(),
-			SERVICE.into(),
-			"litellm-trapi-sync.timer".into(),
-		],
-	)?;
-	if gateway_changed {
-		host.run(
-			"systemctl",
-			&["--user".into(), "restart".into(), SERVICE.into()],
-		)?;
-	} else {
-		service.reload()?;
-	}
-	let config: catalog::Config = serde_json::from_slice(&fs::read(settings.config_path())?)?;
-	service.wait_for_models(&catalog::model_names(&config), &result.config_sha256)?;
-	println!(
-		"{}",
-		json!({"status": "ready", "base_url": format!("{}/v1", settings.local_url()), "models": config.model_list.len(), "key_file": settings.key_path()})
-	);
-	Ok(())
+	transaction::apply_deployment(runtime, service, host, settings, options, &units, &clients)
 }
 
 #[cfg(test)]

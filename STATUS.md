@@ -67,18 +67,59 @@ fixture intermittently failed with `ETXTBSY` while executing a newly written
 script, preventing distribution jobs from running. The fixture now exercises
 the same JSON subprocess boundary through `/bin/sh -c`, without executing a
 freshly writable fixture inode. No subprocess retry policy was added.
+At `8e4e1d7`, [CI run 37489996978](https://github.com/Acture/trapi2litellm/actions/runs/37489996978)
+passed all eight jobs: Python 3.12/3.13, both Linux installed-distribution jobs
+and all four Debian/Ubuntu lifecycle targets. This includes real persistent
+user-service startup/reload with literal special-character paths, plus offline
+package install, upgrade/restart, removal, purge and reinstall. This acceptance
+belongs to `8e4e1d78ba78412a51de54fe4ddb751aa651ea43`; it does not cover the
+additional deployment-rollback checks in the next source change.
 
 Manual long-check commands are in [docs/distribution.md](docs/distribution.md).
 Rust 1.89 is the declared minimum; local checks used 1.98.1, and CI/build images
-pin 1.99.0. No minimum-toolchain execution is claimed.
+pin 1.99.0. A follow-up adds a dedicated minimum-compiler job; its execution
+remains pending, so no minimum-toolchain acceptance is claimed yet.
 
-Explicit `deploy --start` retains the prior activation behavior: a failure after
-publishing configuration may leave the new configuration in place. Full
-deployment activation rollback is tracked separately in
-[OSS-309](https://linear.app/acturea/issue/OSS-309). Live Managed Identity,
-inference, streaming during reload and credential expiry remain untested here.
+Deployment activation rollback is tracked in
+[OSS-309](https://linear.app/acturea/issue/OSS-309); the follow-up below implements
+it, with real Linux acceptance pending. Live Managed Identity, inference,
+streaming during reload and credential expiry remain untested here.
 Regular CI uses offline fixtures on GitHub-hosted runners. No Azure runner is
 required; real Azure acceptance is optional manual work in an existing environment.
+
+## Deployment activation rollback follow-up (2026-10-06)
+
+`deploy --start` now holds the synchronization lock through installation,
+publication, activation and recovery. Failure restores old configuration,
+catalog/sync metadata, generated units and client files, and restores gateway
+and timer enablement/activation. Recovery checks the previous model set/hash
+and service states. First-deployment failure stops/disables new units, removes
+new configuration/units and retains the private key for retry. Failed
+configuration and `.previous` backups are kept. A changed linger setting is
+restored. Recovery failures remain explicit `rollback_failed` outcomes.
+
+Local Rust verification passed 23 tests (20 unit + 3 CLI); the isolated real
+systemd test is explicitly ignored locally. Python's 12 offline tests, Rust
+fmt/Clippy, Python ruff/format/ty and actionlint passed. Fault injection covers
+installation reload, catalog/validation, partial enable, linger, restart,
+reload and readiness failures for first deployment and existing gateways;
+recovery readiness and rejected-artifact write failures are also exercised.
+Tests verify exact previous bytes/permissions, metadata and activation state,
+key retention, terminal status and lock ownership during readiness.
+
+The installed-distribution job explicitly runs the ignored real-systemd test
+after normal service acceptance, using the installed stable CLI. It checks
+first-deployment partial activation and failed redeployment, including recovery
+of an actual gateway's old models/hash and mixed runtime/persistent enablement.
+The synthetic catalog and inert timer sync fixture require no Azure identity.
+This additional acceptance has not yet run; it is not established by the
+earlier distribution job.
+
+`deployment-status.json` records the attempt independently from restored sync
+history and is exposed under `/status`. Abrupt process termination is outside
+this command-failure recovery. Active gateway port/configuration-directory
+changes or incompatible old unit layouts are rejected before publication;
+stop the gateway first for those changes.
 
 ## Accepted source and artifacts (2026-10-04)
 

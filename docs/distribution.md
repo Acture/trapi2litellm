@@ -85,3 +85,24 @@ Remove the three generated units from `~/.config/systemd/user` and run
 configuration and state are retained by package removal and purge. Upgrading a
 package leaves a running gateway on its current workers; run `deploy --start`
 to validate the new installation and restart it.
+
+`deploy --start` holds the synchronization lock through activation. On failure
+it restores the previous configuration, catalog/sync status, generated units
+and client files, then restores the gateway/timer activation and enablement.
+An existing gateway must pass readiness again with its previous model list
+and configuration hash. A failed first deployment removes the new configuration
+and units and stops/disables the new services; it retains the private key for
+retry. Rejected configurations and `.previous` backups are retained.
+
+`deployment-status.json`, also exposed under `/status`, records `ready`,
+`rolled_back` or `rollback_failed` and the failing stage separately from sync
+history. Recovery errors are reported instead of claiming successful rollback.
+This handles command failures, not abrupt process termination. Stop an active
+gateway before changing its configuration directory or port so that rollback
+has a known readiness endpoint, or when replacing an older unit layout that
+does not record those settings in the generated form. A newly enabled linger setting is undone on
+failure; an existing linger setting is retained.
+
+The installed-distribution CI runs real user-systemd rollback checks for first
+deployment and redeployment on both architectures. These use a synthetic catalog
+and an inert sync-service fixture; they never authenticate to Azure.

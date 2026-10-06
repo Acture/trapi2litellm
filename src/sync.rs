@@ -125,6 +125,8 @@ pub struct SyncResult {
 	pub changed: bool,
 	pub reloaded: bool,
 	pub status: &'static str,
+	#[serde(skip)]
+	pub previous_models: Vec<String>,
 }
 
 pub fn now() -> String {
@@ -143,11 +145,26 @@ pub fn synchronize(
 	bootstrap: bool,
 	no_reload: bool,
 ) -> Result<SyncResult> {
-	let started: Instant = Instant::now();
+	let lock: files::SyncLock = lock(settings)?;
+	synchronize_locked(runtime, service, settings, bootstrap, no_reload, &lock)
+}
+
+pub fn lock(settings: &Settings) -> Result<files::SyncLock> {
 	files::private_directory(&settings.config_dir)?;
 	files::private_directory(&settings.state_dir)?;
 	eprintln!("INFO acquiring synchronization lock");
-	let _lock: fs::File = files::sync_lock(&settings.state_dir.join("sync.lock"))?;
+	files::sync_lock(&settings.state_dir.join("sync.lock"))
+}
+
+pub fn synchronize_locked(
+	runtime: &impl Runtime,
+	service: &impl Service,
+	settings: &Settings,
+	bootstrap: bool,
+	no_reload: bool,
+	_lock: &files::SyncLock,
+) -> Result<SyncResult> {
+	let started: Instant = Instant::now();
 	if bootstrap {
 		files::bootstrap_key(&settings.key_path())?;
 	}
@@ -197,6 +214,7 @@ pub fn synchronize(
 		changed,
 		reloaded: false,
 		status: "ok",
+		previous_models,
 	};
 	if changed {
 		if let Some(old) = &old_text {
