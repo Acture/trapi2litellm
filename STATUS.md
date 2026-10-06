@@ -77,8 +77,8 @@ additional deployment-rollback checks in the next source change.
 
 Manual long-check commands are in [docs/distribution.md](docs/distribution.md).
 Rust 1.89 is the declared minimum; local checks used 1.98.1, and CI/build images
-pin 1.99.0. A follow-up adds a dedicated minimum-compiler job; its execution
-remains pending, so no minimum-toolchain acceptance is claimed yet.
+pin 1.99.0. The dedicated minimum-compiler job passed `cargo +1.89.0 check
+--locked --all-targets` at `1e8a793` in CI run 37492074434.
 
 Deployment activation rollback is tracked in
 [OSS-309](https://linear.app/acturea/issue/OSS-309); the follow-up below implements
@@ -112,14 +112,24 @@ after normal service acceptance, using the installed stable CLI. It checks
 first-deployment partial activation and failed redeployment, including recovery
 of an actual gateway's old models/hash and mixed runtime/persistent enablement.
 The synthetic catalog and inert timer sync fixture require no Azure identity.
-This additional acceptance has not yet run; it is not established by the
-earlier distribution job.
+This additional acceptance passed on both architectures at
+`1e8a793160a74c9c03aa8a3b9ff9ecee55d3192c` in
+[CI run 37492074434](https://github.com/Acture/trapi2litellm/actions/runs/37492074434).
+All nine jobs passed for that source, including the four Debian/Ubuntu lifecycle
+targets and the declared minimum Rust compiler.
 
 `deployment-status.json` records the attempt independently from restored sync
 history and is exposed under `/status`. Abrupt process termination is outside
 this command-failure recovery. Active gateway port/configuration-directory
 changes or incompatible old unit layouts are rejected before publication;
 stop the gateway first for those changes.
+
+The final offline contract follow-up adds auth rejection before upstream
+execution, SSE frame delivery before upstream completion, deployment/sync status
+separation and current SDK-supplied catalog tokens across successive requests.
+Local Python verification passed 16 tests with ruff/format/ty; these mocks
+do not establish real Azure authentication or token-expiry recovery. The new
+contract tests have not yet run in CI.
 
 ## Accepted source and artifacts (2026-10-04)
 

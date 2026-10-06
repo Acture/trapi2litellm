@@ -68,7 +68,9 @@ have actually run against the current migration.
 Regular CI uses GitHub-hosted runners and offline fixtures; it does not require
 an Azure runner or Managed Identity. Mocked tests and synthetic gateway checks
 cannot establish real Azure authentication, inference or credential refresh.
-These remain optional manual acceptance in an existing Azure environment,
+The offline contract tests cover API-key rejection, unbuffered SSE frame
+forwarding and using each request's current SDK-supplied catalog token.
+Real Azure acceptance remains optional manual work in an existing Azure environment,
 recorded separately from the packaging CI result.
 
 ## Upgrade and removal

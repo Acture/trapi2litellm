@@ -145,6 +145,32 @@ class RuntimeTests(unittest.TestCase):
             str(Path(runtime.__file__).resolve().parent.parent),
         )
 
+    def test_catalog_uses_current_sdk_token_on_each_request(self) -> None:
+        credential = MagicMock()
+        credential.__enter__.return_value = credential
+        credential.get_token.side_effect = [
+            SimpleNamespace(token="first-token"),
+            SimpleNamespace(token="refreshed-token"),
+        ]
+        client = MagicMock()
+        client.__enter__.return_value = client
+        client.get.return_value.json.return_value = {"data": []}
+        request: dict[str, object] = {
+            "base_url": "https://trapi.invalid",
+            "catalog_version": "preview",
+            "scope": "api://trapi/.default",
+        }
+        with (
+            patch("azure.identity.ManagedIdentityCredential", return_value=credential),
+            patch.object(httpx, "Client", return_value=client),
+        ):
+            runtime.catalog(request)
+            runtime.catalog(request)
+        self.assertEqual(
+            [call.kwargs["headers"]["Authorization"] for call in client.get.call_args_list],
+            ["Bearer first-token", "Bearer refreshed-token"],
+        )
+
     def test_installed_native_help_is_independent_of_settings(self) -> None:
         command = Path(sys.executable).parent / "trapi2litellm"
         self.assertIn(

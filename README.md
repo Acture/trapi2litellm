@@ -103,7 +103,7 @@ This key is separate from the auto-refreshed Managed Identity credential.
 | `/v1/responses` | Responses API |
 | `/catalog` | Cached original TRAPI discovery evidence and fetch time |
 | `/model/info` | LiteLLM configuration and per-model metadata |
-| `/status` | Running configuration hash and sync history |
+| `/status` | Running configuration hash, sync history and deployment outcome |
 
 For example, an OpenAI-compatible SDK uses `trapi/gpt-5.2_2025-12-11` as its
 model. A client that itself uses LiteLLM provider selection, such as Harbor,
