@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from offline_gateway import prepare, probe, wait_ready
+from offline_gateway import prepare, probe, seed_usage, wait_ready
 
 LOG = logging.getLogger(__name__)
 
@@ -101,6 +101,7 @@ def main() -> None:
     run(["chown", "-R", "acceptance:acceptance", str(home)])
     run(["systemctl", "--user", "start", "litellm-trapi.service"], user=True)
     wait_ready(4000)
+    seed_usage(state)
     probe(4000)
     digest = hashlib.sha256((config / "gateway.env").read_bytes()).hexdigest()
     run(["dpkg", "--install", str(args.new.resolve())])

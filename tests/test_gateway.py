@@ -14,6 +14,8 @@ from types import ModuleType
 from typing import cast
 from unittest.mock import patch
 
+from httpx import ASGITransport, AsyncClient
+from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -21,16 +23,6 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 import trapi2litellm
 
 KEY = b"fixture-master-key"
-
-
-class RouteRegistry:
-    def add_route(
-        self,
-        path: str,
-        endpoint: Callable[[Request], Awaitable[JSONResponse]],
-        methods: list[str],
-    ) -> None:
-        pass
 
 
 async def unused_receive() -> Message:
@@ -56,7 +48,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.config: Path = self.root / "config.yaml"
         self.config.write_text("model_list: []\n")
         proxy = ModuleType("litellm.proxy.proxy_server")
-        setattr(proxy, "app", RouteRegistry())
+        setattr(proxy, "app", Starlette())
         with (
             patch.dict(sys.modules, {"litellm.proxy.proxy_server": proxy}),
             patch.dict(
@@ -72,6 +64,29 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                 str(Path(trapi2litellm.__file__).parent / "gateway_app.py")
             )
         self.gate = cast(Callable[[ASGIApp], ASGIApp], self.module["MasterKeyGate"])
+
+    async def test_dashboard_shell_is_public_but_all_data_requires_key(self) -> None:
+        app = cast(ASGIApp, self.module["app"])
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            for path in ("/gateway", "/gateway/dashboard.js"):
+                response = await client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertNotIn(KEY.decode(), response.text)
+                self.assertEqual(response.headers["cache-control"], "no-store")
+            for path in ("/gateway/models", "/catalog", "/status"):
+                for headers in ({}, {"Authorization": "Bearer wrong"}):
+                    self.assertEqual((await client.get(path, headers=headers)).status_code, 401)
+            response = await client.get(
+                "/gateway/models", headers={"Authorization": f"Bearer {KEY.decode()}"}
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["data"], [])
+            self.assertEqual(response.json()["other_usage"], [])
+            self.assertEqual(
+                response.headers["x-trapi-config-sha256"],
+                hashlib.sha256(self.config.read_bytes()).hexdigest(),
+            )
+            self.assertEqual(response.headers["cache-control"], "no-store")
 
     async def test_missing_and_wrong_keys_do_not_reach_upstream(self) -> None:
         async def upstream(scope: Scope, receive: Receive, send: Send) -> None:

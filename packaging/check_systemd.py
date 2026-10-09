@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from urllib.error import URLError
 
-from offline_gateway import prepare, probe, wait_ready
+from offline_gateway import prepare, probe, seed_usage, wait_ready
 
 
 def run(command: list[str]) -> None:
@@ -27,6 +27,7 @@ def main() -> None:
     try:
         run(["systemctl", "--user", "start", names[0]])
         wait_ready(4000)
+        seed_usage(state)
         probe(4000)
         with (config / "config.yaml").open("a") as handle:
             handle.write("# Offline systemd reload acceptance\n")

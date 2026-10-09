@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TRAPI Gateway</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f5f7fa;
+        --panel: #fff;
+        --text: #182536;
+        --muted: #66758a;
+        --line: #e1e7ee;
+        --accent: #14756c;
+        --soft: #e7f3f0;
+        --warn: #aa641f;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          14px/1.6 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          "PingFang SC",
+          sans-serif;
+      }
+      main {
+        max-width: 1440px;
+        margin: auto;
+        padding: 44px 32px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 28px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 29px;
+        letter-spacing: -0.8px;
+        font-weight: 650;
+      }
+      p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+      .state {
+        padding: 7px 13px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .state.live {
+        background: var(--soft);
+        color: var(--accent);
+        border-color: transparent;
+      }
+      .state.error {
+        color: var(--warn);
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+      }
+      form {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 18px 22px;
+      }
+      label {
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      input {
+        flex: 1;
+        min-width: 0;
+        padding: 10px 13px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--bg);
+        color: var(--text);
+        font: inherit;
+      }
+      button {
+        padding: 10px 18px;
+        border: 0;
+        border-radius: 8px;
+        color: #fff;
+        background: var(--accent);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .hint {
+        padding: 0 22px 17px;
+        margin: 0;
+        font-size: 12px;
+      }
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin: 24px 0;
+      }
+      .metric {
+        padding: 20px 22px;
+      }
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .metric strong {
+        display: block;
+        font-size: 29px;
+        letter-spacing: -0.6px;
+        margin: 5px 0;
+        font-variant-numeric: tabular-nums;
+      }
+      .metric small {
+        color: var(--muted);
+      }
+      .table-head {
+        padding: 20px 22px;
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+      }
+      h2 {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 600;
+      }
+      .table-head span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .scroll {
+        overflow: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 1050px;
+        text-align: left;
+      }
+      th {
+        color: var(--muted);
+        font-size: 11px;
+        letter-spacing: 0.3px;
+        font-weight: 600;
+        background: var(--bg);
+      }
+      th,
+      td {
+        padding: 17px 20px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+      th:first-child,
+      td:first-child {
+        min-width: 260px;
+      }
+      tr:last-child td {
+        border-bottom: 0;
+      }
+      td strong {
+        display: block;
+        font-size: 13px;
+        word-break: break-word;
+      }
+      td small {
+        display: block;
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 4px;
+      }
+      .number {
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      details {
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 8px;
+      }
+      summary {
+        cursor: pointer;
+      }
+      pre {
+        font:
+          11px/1.5 ui-monospace,
+          SFMono-Regular,
+          monospace;
+        white-space: pre-wrap;
+        word-break: break-word;
+        max-width: 320px;
+      }
+      #empty {
+        text-align: center;
+        padding: 48px 20px;
+        color: var(--muted);
+      }
+      footer {
+        margin-top: 20px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      footer p {
+        margin-top: 8px;
+      }
+      @media (max-width: 700px) {
+        main {
+          padding: 25px 16px;
+        }
+        header {
+          align-items: flex-start;
+        }
+        h1 {
+          font-size: 24px;
+        }
+        form {
+          flex-wrap: wrap;
+        }
+        form label {
+          width: 100%;
+        }
+        .summary {
+          grid-template-columns: repeat(2, 1fr);
+          gap: 10px;
+        }
+        .metric {
+          padding: 16px;
+        }
+        .table-head {
+          align-items: flex-start;
+          flex-direction: column;
+          gap: 6px;
+        }
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111922;
+          --panel: #172330;
+          --text: #e4ecf3;
+          --muted: #9eafbf;
+          --line: #2b3a49;
+          --accent: #2f998b;
+          --soft: #203f3b;
+          --warn: #dba46a;
+        }
+      }
+    </style>
+    <script src="/gateway/dashboard.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>TRAPI Gateway</h1>
+          <p>模型能力、上游限额与本网关的用量观测</p>
+        </div>
+        <span id="state" class="state">等待连接</span>
+      </header>
+      <section class="panel">
+        <form id="connect">
+          <label for="key">Gateway key</label
+          ><input
+            id="key"
+            type="password"
+            autocomplete="off"
+            placeholder="输入本地网关 key"
+            required
+          /><button type="submit">连接</button>
+        </form>
+        <p class="hint">Key 仅保存在本页内存中，通过认证请求读取数据。</p>
+      </section>
+      <section class="summary">
+        <div class="panel metric">
+          <span>请求 · 近 24 小时</span><strong id="requests">—</strong
+          ><small id="failures">等待观测数据</small>
+        </div>
+        <div class="panel metric">
+          <span>已报告 token · 近 24 小时</span><strong id="reported">—</strong
+          ><small>来自响应中的 usage</small>
+        </div>
+        <div class="panel metric">
+          <span>估算 token · 近 24 小时</span><strong id="estimated">—</strong
+          ><small>缺失 usage 或仍在进行中的请求</small>
+        </div>
+        <div class="panel metric">
+          <span>进行中的请求</span><strong id="active">—</strong
+          ><small>汇总当前网关的所有 worker</small>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="table-head">
+          <h2>运行中的模型</h2>
+          <span id="sync">目录抓取时间：—</span>
+        </div>
+        <div class="scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>模型 / 能力</th>
+                <th>上游请求限额</th>
+                <th>上游 token 限额</th>
+                <th>请求 · 近 60 秒</th>
+                <th>token · 近 60 秒</th>
+                <th>在途 token 估算</th>
+                <th>进行中</th>
+              </tr>
+            </thead>
+            <tbody id="models"></tbody>
+          </table>
+        </div>
+        <div id="empty">连接后查看模型与用量。无需调用上游推理。</div>
+      </section>
+      <footer>
+        <p>
+          限额来自当前运行配置中的 TRAPI
+          元数据，尚未启用网关主动限流；模型列表不代表实时推理健康检查。
+        </p>
+        <p>
+          用量只统计经过本网关的请求。token
+          窗口按完成时间计入，进行中用量单列；粗估按 UTF-8
+          字节数换算，无法覆盖所有多模态或隐藏 token。
+        </p>
+        <p>
+          这些是本地观测，不是账单或上游剩余额度。API：<code
+            >/gateway/models</code
+          >
+          · 每 3 秒更新 · 统计保留 24 小时
+        </p>
+        <p id="observation">最近观测：—</p>
+      </footer>
+    </main>
+  </body>
+</html>

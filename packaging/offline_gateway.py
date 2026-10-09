@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import socket
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -14,6 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import ProxyHandler, Request, build_opener
 
 KEY = "sk-offline-packaging-key"
+FETCHED_AT = "2026-10-10T00:00:00Z"
 
 
 def prepare(config: Path, state: Path) -> None:
@@ -23,9 +25,63 @@ def prepare(config: Path, state: Path) -> None:
     (config / "gateway.env").chmod(0o600)
     # A synthetic catalog-only model. No test calls an inference endpoint.
     (config / "config.yaml").write_text(
-        "model_list:\n  - model_name: trapi/offline\n    litellm_params:\n      model: azure/gpt-4o\n      api_base: https://upstream.invalid\n      api_version: '2025-04-01-preview'\ngeneral_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n  disable_spend_logs: true\nlitellm_settings:\n  telemetry: false\n  turn_off_message_logging: true\n"
+        json.dumps(
+            {
+                "model_list": [
+                    {
+                        "model_name": "trapi/offline",
+                        "litellm_params": {
+                            "model": "azure/gpt-4o",
+                            "api_base": "https://upstream.invalid",
+                            "api_version": "2025-04-01-preview",
+                        },
+                        "model_info": {
+                            "capabilities": {"chat_completion": True},
+                            "rate_limits": {"requests": {"count": 12}, "tokens": 400},
+                        },
+                    }
+                ],
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "disable_spend_logs": True,
+                },
+                "litellm_settings": {"telemetry": False, "turn_off_message_logging": True},
+            }
+        )
+        + "\n"
     )
-    (state / "catalog.json").write_text('{"catalog": {"data": []}, "fixture": true}\n')
+    (state / "catalog.json").write_text(
+        json.dumps({"catalog": {"data": []}, "fixture": True, "fetched_at": FETCHED_AT})
+    )
+    (state / "sync-status.json").write_text(
+        json.dumps(
+            {
+                "checked_at": FETCHED_AT,
+                "config_sha256": hashlib.sha256((config / "config.yaml").read_bytes()).hexdigest(),
+            }
+        )
+    )
+
+
+def seed_usage(state: Path) -> None:
+    """Seed numbers in the initialized store; never invoke upstream inference."""
+    with sqlite3.connect(state / "usage.sqlite3", timeout=5) as db:
+        db.execute("INSERT INTO workers VALUES (?,?)", ("packaging-fixture", time.time()))
+        db.execute(
+            "INSERT INTO requests VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                "packaging-fixture",
+                "packaging-fixture",
+                "trapi/offline",
+                time.time(),
+                time.time(),
+                "succeeded",
+                999,
+                999,
+                12,
+                6,
+            ),
+        )
 
 
 def wait_ready(
@@ -61,19 +117,20 @@ def wait_ready(
 
 def probe(port: int) -> None:
     client = build_opener(ProxyHandler({}))
-    for key in (None, "wrong-key"):
-        request = Request(
-            f"http://127.0.0.1:{port}/v1/models",
-            headers={"Authorization": f"Bearer {key}"} if key else {},
-        )
-        try:
-            client.open(request, timeout=30).close()
-        except HTTPError as error:
-            if error.code != 401:
-                raise
-        else:
-            raise AssertionError("Missing/wrong key was accepted")
-    for endpoint in ("/v1/models", "/catalog", "/status", "/model/info"):
+    for endpoint in ("/v1/models", "/gateway/models"):
+        for key in (None, "wrong-key"):
+            request = Request(
+                f"http://127.0.0.1:{port}{endpoint}",
+                headers={"Authorization": f"Bearer {key}"} if key else {},
+            )
+            try:
+                client.open(request, timeout=30).close()
+            except HTTPError as error:
+                if error.code != 401:
+                    raise
+            else:
+                raise AssertionError("Missing/wrong key was accepted")
+    for endpoint in ("/v1/models", "/catalog", "/status", "/model/info", "/gateway/models"):
         with client.open(
             Request(
                 f"http://127.0.0.1:{port}{endpoint}", headers={"Authorization": f"Bearer {KEY}"}
@@ -82,7 +139,26 @@ def probe(port: int) -> None:
         ) as response:
             if not response.headers.get("X-TRAPI-Config-SHA256"):
                 raise AssertionError("Missing configuration hash")
-            json.load(response)
+            payload = json.load(response)
+            if endpoint == "/gateway/models":
+                model = payload["data"][0]
+                if (
+                    model["capabilities"] != {"chat_completion": True}
+                    or model["limits"][0]["per_minute"] != 12
+                ):
+                    raise AssertionError("Installed model metadata was lost")
+                if payload["catalog_fetched_at"] != FETCHED_AT:
+                    raise AssertionError("Missing catalog fetch time")
+                if model["usage"]["tokens"]["reported"] != {"input": 12, "output": 6}:
+                    raise AssertionError("Shared usage was lost across workers/reload")
+    for endpoint, marker in (
+        ("/gateway", b"TRAPI Gateway"),
+        ("/gateway/dashboard.js", b"/gateway/models"),
+    ):
+        with client.open(f"http://127.0.0.1:{port}{endpoint}", timeout=30) as response:
+            body = response.read()
+            if marker not in body or KEY.encode() in body:
+                raise AssertionError("Installed dashboard resource missing or leaked key")
 
 
 def check(command: list[str], work: Path, config_path: str = "default") -> None:
@@ -120,10 +196,14 @@ def check(command: list[str], work: Path, config_path: str = "default") -> None:
         )
         try:
             wait_ready(port, process)
+            seed_usage(state)
             probe(port)
             with selected_config.open("a") as handle:
                 handle.write("# Offline reload acceptance\n")
             digest = hashlib.sha256(selected_config.read_bytes()).hexdigest()
+            (state / "sync-status.json").write_text(
+                json.dumps({"checked_at": FETCHED_AT, "config_sha256": digest})
+            )
             process.send_signal(signal.SIGHUP)
             wait_ready(port, process, digest)
             probe(port)

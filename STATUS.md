@@ -1,9 +1,37 @@
 # Distribution status
 
-Current execution home: [OSS-306](https://linear.app/acturea/issue/OSS-306), Rust
-control migration. Earlier Python packaging acceptance belongs to
+Current execution home: [OSS-381](https://linear.app/acturea/issue/OSS-381), model
+metadata and live local usage display. Rust control migration belongs to
+[OSS-306](https://linear.app/acturea/issue/OSS-306). Earlier Python packaging acceptance belongs to
 [OSS-76](https://linear.app/acturea/issue/OSS-76), formerly P-866.
 This file owns measured packaging evidence; channel integration is P-867.
+
+## Gateway model and usage display (2026-10-10)
+
+The authenticated `/gateway/models` API supplies running model capabilities,
+original and normalized upstream limits, catalog/config sync times and local
+usage. `/gateway` is an empty dashboard shell; its data requires the gateway key,
+kept only in browser memory. The page refreshes every three seconds.
+
+SQLite aggregates local workers and retains observations for 24 hours, including
+across HUP/restart. Response-reported input/output usage overrides estimates;
+completed-window and in-flight estimates are separate. Unknown or multimodal
+usage remains explicit. No prompt, reply or key is persisted in the usage store.
+These observations do not establish billing, global quota remaining or enforcement.
+
+Local acceptance: Python ruff/format/ty and 31 offline tests; TypeScript strict
+checking of the typed dashboard script, ESLint, Prettier and actionlint.
+Tests include two real processes sharing counts, rolling windows, interrupted
+workers, cancellation, fragmented streaming, privacy and authenticated data.
+The existing editable installation passed actual two-worker foreground startup,
+metadata/page probes and HUP with seeded usage preserved; no upstream inference.
+An independent headless Chromium check passed desktop/mobile layout, key
+rejection/recovery, polling and memory-only key handling using synthetic API data.
+
+Installed wheel/sdist, persistent systemd and Debian lifecycle acceptance now
+probe the new page/assets, authenticated metadata and shared usage retention.
+Full CI acceptance for this change is pending; earlier accepted source below
+does not establish acceptance of this addition.
 
 ## Final source acceptance (2026-10-07)
 

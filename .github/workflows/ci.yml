@@ -71,6 +71,17 @@ jobs:
           uv run --frozen ruff format --check .; or exit
           uv run --frozen ty check; or exit
           uv run --frozen python -m unittest discover -s tests -v; or exit
+      - if: matrix.python == '3.12'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.2"
+      - if: matrix.python == '3.12'
+        name: Dashboard types, lint and formatting
+        shell: fish {0}
+        run: |
+          bunx --package typescript@7.0.2 tsc --noEmit --allowJs --checkJs --strict --lib ES2022,DOM --target ES2022 src/trapi2litellm/dashboard.js; or exit
+          bunx --package eslint@8.51.0 eslint --no-eslintrc --env browser,es2022 --parser-options '{"ecmaVersion":2022}' --rule 'no-undef:error' --rule 'no-unused-vars:error' src/trapi2litellm/dashboard.js; or exit
+          bunx --package prettier@3.6.2 prettier --check src/trapi2litellm/dashboard.html src/trapi2litellm/dashboard.js
       - name: Build distributions
         shell: fish {0}
         run: uv build

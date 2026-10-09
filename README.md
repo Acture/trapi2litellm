@@ -3,8 +3,9 @@
 TRAPI model discovery and a local LiteLLM gateway, using Azure Managed Identity.
 The native Rust CLI owns synchronization and user-service deployment; the
 installed Python environment runs LiteLLM and the Azure SDK.
-One port serves the model APIs, catalog and sync status. No Azure CLI login,
-stored upstream bearer token, database, or separate catalog server is needed.
+One port serves the model APIs, dashboard, catalog and sync status. No Azure CLI
+login, stored upstream bearer token, external database service, or separate
+catalog server is needed. Local usage observations use embedded SQLite.
 
 License: [AGPL-3.0-only](LICENSE).
 
@@ -93,8 +94,11 @@ source ~/.config/litellm-trapi/client.fish     # fish
 ```
 
 These set `OPENAI_BASE_URL` and `OPENAI_API_KEY` without printing the key.
-Every endpoint requires the local gateway key in `Authorization: Bearer ...`.
+Data and inference endpoints require the local gateway key in `Authorization: Bearer ...`.
 This key is separate from the auto-refreshed Managed Identity credential.
+Open **http://127.0.0.1:4000/gateway** and enter that key to view the dashboard.
+Its empty page and script are public; model metadata and usage remain authenticated.
+The browser keeps the key in page memory, without URL or persistent storage.
 
 | Endpoint on port 4000 | Purpose |
 | --- | --- |
@@ -104,6 +108,8 @@ This key is separate from the auto-refreshed Managed Identity credential.
 | `/catalog` | Cached original TRAPI discovery evidence and fetch time |
 | `/model/info` | LiteLLM configuration and per-model metadata |
 | `/status` | Running configuration hash, sync history and deployment outcome |
+| `/gateway` | Model capabilities, upstream limits, sync times and live local usage |
+| `/gateway/models` | The same authenticated model metadata and usage as JSON |
 
 For example, an OpenAI-compatible SDK uses `trapi/gpt-5.2_2025-12-11` as its
 model. A client that itself uses LiteLLM provider selection, such as Harbor,
@@ -155,6 +161,30 @@ check fails.
   code controls retries. An upstream retirement cannot be prevented locally.
 - Basic smoke tests do not certify every model, parameter or token-expiry cycle.
 
+The dashboard refreshes every three seconds. It displays each model's original
+capabilities and `RateLimits`, plus normalized requests/minute and tokens/minute.
+As in the [TRAPI portal](https://trapi-portal.research.microsoft.com/models),
+limit values of 0 or -1 mean unlimited; missing limits remain unknown.
+Metadata comes from the worker's running configuration. Catalog fetch time and
+successful configuration sync time are separate; a sync for another config hash
+does not label an older worker as updated.
+
+Usage covers Chat Completions, Completions, Responses, Embeddings and Messages
+requests through this gateway, including failed or cancelled attempts. Local
+worker counts are shared and survive reload/restart, with 24-hour retention.
+The page shows request counts, input/output tokens, in-flight requests and the
+last minute's consumption. Request windows use arrival time; completed token
+windows use completion time, with in-flight estimates shown separately.
+Reported response `usage` replaces estimates. Missing usage is approximated from
+UTF-8 JSON/text bytes divided by four, rather than a model tokenizer. Multimodal,
+malformed or over-1-MiB observation payloads can have unknown usage. Request and
+response content and API keys are not persisted in the usage store. Workers that
+stop heartbeating for 30 seconds have their unfinished requests marked interrupted.
+
+These are local observations, not monetary billing or upstream remaining quota.
+Other clients sharing the upstream quota are invisible here. Displaying limits
+does not enable gateway quota enforcement.
+
 ## Operations and tests
 
 ```sh
@@ -196,7 +226,8 @@ acceptance evidence remains in [STATUS.md](STATUS.md).
 
 - `src/*.rs`: native CLI, immutable settings, catalog policy, sync and user-service deployment
 - `src/trapi2litellm/runtime.py`: internal Azure SDK/schema boundary and Gunicorn entry
-- `src/trapi2litellm/gateway_app.py`: ASGI key gate, catalog and status routes
+- `src/trapi2litellm/gateway_app.py`: ASGI key gate, dashboard, catalog and status routes
+- `src/trapi2litellm/model_view.py`, `usage.py`: running metadata and shared local usage observations
 - `tests/`: offline regression tests
 - `packaging/`: artifact builders and distribution acceptance
 - `docs/`: public documentation
