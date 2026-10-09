@@ -42,6 +42,9 @@ WAL journal. The multiprocessing regression starts from a fresh store. A late
 completion after a worker lease expires also replaces its estimates with reported
 usage. Subsequent full CI acceptance is pending.
 
+Debian acceptance seeds synthetic usage as the service user, keeping SQLite's
+private WAL/SHM files owned by that user during concurrent heartbeats.
+
 ## Final source acceptance (2026-10-07)
 
 Final functional source: `39e297a4487f583b56bdccd111e75133afd0c211`, pushed to
