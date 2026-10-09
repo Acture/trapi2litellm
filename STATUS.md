@@ -28,10 +28,22 @@ metadata/page probes and HUP with seeded usage preserved; no upstream inference.
 An independent headless Chromium check passed desktop/mobile layout, key
 rejection/recovery, polling and memory-only key handling using synthetic API data.
 
-Installed wheel/sdist, persistent systemd and Debian lifecycle acceptance now
-probe the new page/assets, authenticated metadata and shared usage retention.
-Full CI acceptance for this change is pending; earlier accepted source below
-does not establish acceptance of this addition.
+Final accepted source: `5b3312d8fab8fb946caa47ce9cc3fd6e72fd8591`, pushed to
+`main`. [CI 37959437354](https://github.com/Acture/trapi2litellm/actions/runs/37959437354)
+completed successfully with all nine jobs passing:
+
+| Target | Verified behavior |
+| --- | --- |
+| Rust 1.89 | Locked minimum-compiler check of all targets |
+| Python 3.12 and 3.13 | Rust fmt/Clippy and 23 offline tests; Python ruff/format/ty and 32 offline tests; wheel/sdist builds |
+| Dashboard | Strict TypeScript checking of the typed script, ESLint and Prettier |
+| Ubuntu amd64 and arm64 | Installed wheel/sdist, persistent uv tool and real systemd startup/HUP/rollback; new page/assets, authenticated metadata and shared usage retention |
+| Debian 13 and Ubuntu 24.04 × amd64 and arm64 | Native builds; network-disabled install, upgrade/restart, remove, purge and reinstall; dashboard and retained usage probes |
+
+All five uploaded bundles (`python-dist` and `deb-0` through `deb-3`) were present
+and unexpired at acceptance. This ledger-only update does not rebuild that
+accepted source or publish releases. Real Azure inference and production host
+deployment remain separate from the offline acceptance above.
 
 First source `c9defb5`, [CI 37956948460](https://github.com/Acture/trapi2litellm/actions/runs/37956948460),
 passed both Python source jobs, dashboard checks, MSRV and amd64 installed
@@ -40,7 +52,7 @@ with `database is locked`; Debian jobs were skipped. Bootstrap now serializes
 workers using a separate advisory initialization lock and avoids changing an existing
 WAL journal. The multiprocessing regression starts from a fresh store. A late
 completion after a worker lease expires also replaces its estimates with reported
-usage. Subsequent full CI acceptance is pending.
+usage. The final run above establishes acceptance of these fixes.
 
 Debian acceptance seeds synthetic usage as the service user, keeping SQLite's
 private WAL/SHM files owned by that user during concurrent heartbeats.
