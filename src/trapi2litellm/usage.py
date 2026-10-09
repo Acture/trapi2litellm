@@ -1,4 +1,4 @@
-"""Private, cross-worker usage observations; this is not quota enforcement."""
+"""Private, cross-worker usage observations without rate-limit enforcement."""
 
 from __future__ import annotations
 

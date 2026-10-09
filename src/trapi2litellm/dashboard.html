@@ -271,7 +271,7 @@
       <header>
         <div>
           <h1>TRAPI Gateway</h1>
-          <p>模型能力、上游限额与本网关的用量观测</p>
+          <p>模型能力、上游速率上限与本网关的用量观测</p>
         </div>
         <span id="state" class="state">等待连接</span>
       </header>
@@ -316,8 +316,8 @@
             <thead>
               <tr>
                 <th>模型 / 能力</th>
-                <th>上游请求限额</th>
-                <th>上游 token 限额</th>
+                <th>上游请求速率上限</th>
+                <th>上游 token 速率上限</th>
                 <th>请求 · 近 60 秒</th>
                 <th>token · 近 60 秒</th>
                 <th>在途 token 估算</th>
@@ -331,7 +331,7 @@
       </section>
       <footer>
         <p>
-          限额来自当前运行配置中的 TRAPI
+          速率上限来自当前运行配置中的 TRAPI
           元数据，尚未启用网关主动限流；模型列表不代表实时推理健康检查。
         </p>
         <p>
@@ -340,7 +340,7 @@
           字节数换算，无法覆盖所有多模态或隐藏 token。
         </p>
         <p>
-          这些是本地观测，不是账单或上游剩余额度。API：<code
+          用量只覆盖本网关，共享同一上游的其他客户端流量未计入。API：<code
             >/gateway/models</code
           >
           · 每 3 秒更新 · 统计保留 24 小时

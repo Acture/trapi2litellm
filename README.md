@@ -108,7 +108,7 @@ The browser keeps the key in page memory, without URL or persistent storage.
 | `/catalog` | Cached original TRAPI discovery evidence and fetch time |
 | `/model/info` | LiteLLM configuration and per-model metadata |
 | `/status` | Running configuration hash, sync history and deployment outcome |
-| `/gateway` | Model capabilities, upstream limits, sync times and live local usage |
+| `/gateway` | Model capabilities, upstream rate limits, sync times and live local usage |
 | `/gateway/models` | The same authenticated model metadata and usage as JSON |
 
 For example, an OpenAI-compatible SDK uses `trapi/gpt-5.2_2025-12-11` as its
@@ -141,7 +141,7 @@ worked. Keep the dated deployment ID in requests; no moving model aliases are
 created. The real model family from TRAPI metadata is supplied to LiteLLM for
 parameter validation without rewriting that deployment ID.
 
-## Synchronization and limits
+## Synchronization and rate limits
 
 An hourly systemd timer fetches the catalog through Managed Identity. It
 generates a deterministic config and does nothing to the gateway if unchanged.
@@ -164,7 +164,9 @@ check fails.
 The dashboard refreshes every three seconds. It displays each model's original
 capabilities and `RateLimits`, plus normalized requests/minute and tokens/minute.
 As in the [TRAPI portal](https://trapi-portal.research.microsoft.com/models),
-limit values of 0 or -1 mean unlimited; missing limits remain unknown.
+limit values of 0 or -1 mean no rate cap for that dimension; missing limits remain unknown.
+These limits describe per-minute throughput, rather than a cumulative token
+allocation. The gateway displays usage and rate caps without a quota balance.
 Metadata comes from the worker's running configuration. Catalog fetch time and
 successful configuration sync time are separate; a sync for another config hash
 does not label an older worker as updated.
@@ -181,9 +183,10 @@ malformed or over-1-MiB observation payloads can have unknown usage. Request and
 response content and API keys are not persisted in the usage store. Workers that
 stop heartbeating for 30 seconds have their unfinished requests marked interrupted.
 
-These are local observations, not monetary billing or upstream remaining quota.
-Other clients sharing the upstream quota are invisible here. Displaying limits
-does not enable gateway quota enforcement.
+These observations cover only this gateway. Other clients sharing the upstream
+rate limits are invisible here, so local consumption does not establish the
+upstream's full rate-window usage. Displaying limits does not enable gateway
+rate-limit enforcement.
 
 ## Operations and tests
 

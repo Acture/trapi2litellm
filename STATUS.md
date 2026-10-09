@@ -17,7 +17,10 @@ SQLite aggregates local workers and retains observations for 24 hours, including
 across HUP/restart. Response-reported input/output usage overrides estimates;
 completed-window and in-flight estimates are separate. Unknown or multimodal
 usage remains explicit. No prompt, reply or key is persisted in the usage store.
-These observations do not establish billing, global quota remaining or enforcement.
+These observations cover local usage, rather than the upstream's full rate window.
+TRAPI `RateLimits` are throughput caps (RPM/TPM), not cumulative token allocations;
+the API does not expose a remaining-quota balance. Gateway rate-limit enforcement
+remains disabled.
 
 Local acceptance: Python ruff/format/ty and 32 offline tests; TypeScript strict
 checking of the typed dashboard script, ESLint, Prettier and actionlint.
@@ -56,6 +59,12 @@ usage. The final run above establishes acceptance of these fixes.
 
 Debian acceptance seeds synthetic usage as the service user, keeping SQLite's
 private WAL/SHM files owned by that user during concurrent heartbeats.
+
+Following the user's clarification, the page and docs now describe RPM/TPM as
+rate caps. The unused `upstream_remaining_quota` field was removed. Python and
+dashboard lint/type/format checks and all 32 offline tests passed locally for
+this terminology/API correction; the full-matrix evidence above applies to the
+accepted source identified there.
 
 ## Final source acceptance (2026-10-07)
 

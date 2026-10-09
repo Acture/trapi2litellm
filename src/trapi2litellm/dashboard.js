@@ -46,7 +46,7 @@ function limits(model, kind) {
   if (!values.length) return "未提供";
   return values
     .map((limit) => {
-      if (limit.state === "unlimited") return "无限额";
+      if (limit.state === "unlimited") return "未设速率上限";
       if (limit.state !== "limited" || limit.per_minute === null) return "未知";
       return `${number(limit.per_minute)} ${limit.unit}`;
     })
@@ -69,7 +69,7 @@ function render(view) {
     identity.append(capability);
     const details = document.createElement("details");
     const summary = document.createElement("summary");
-    summary.textContent = "能力、限额与用量详情";
+    summary.textContent = "能力、速率上限与用量详情";
     const raw = document.createElement("pre");
     raw.textContent = JSON.stringify(
       {

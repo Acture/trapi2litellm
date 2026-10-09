@@ -1,4 +1,4 @@
-"""Running model metadata and local usage, without upstream quota guesses."""
+"""Running model metadata, rate limits and observed local usage."""
 
 from __future__ import annotations
 
@@ -100,7 +100,6 @@ class ModelView:
             "usage_retention_seconds": RETENTION_SECONDS,
             "estimate_method": "UTF-8 JSON/text bytes divided by four; reported usage takes precedence",
             "token_window": "completed requests in the last minute; in-flight estimates shown separately",
-            "upstream_remaining_quota": None,
             "rate_limit_enforcement": False,
             "other_usage": [{"model": model, "usage": usage} for model, usage in observed.items()],
         }
