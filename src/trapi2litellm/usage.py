@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
+import os
 import sqlite3
 import time
 import uuid
@@ -75,17 +77,23 @@ class UsageStore:
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path.touch(mode=0o600, exist_ok=True)
         self.path.chmod(0o600)
-        with self.connection() as db:
-            db.execute("PRAGMA journal_mode=WAL")
-            db.executescript(
-                "CREATE TABLE IF NOT EXISTS workers (id TEXT PRIMARY KEY, updated REAL NOT NULL);"
-                "CREATE TABLE IF NOT EXISTS requests ("
-                "id TEXT PRIMARY KEY, owner TEXT NOT NULL, model TEXT, started REAL NOT NULL,"
-                "finished REAL, status TEXT NOT NULL, input_est INTEGER, output_est INTEGER,"
-                "input_actual INTEGER, output_actual INTEGER);"
-                "CREATE INDEX IF NOT EXISTS requests_started ON requests(started);"
-                "CREATE INDEX IF NOT EXISTS requests_status_owner ON requests(status,owner);"
-            )
+        # Journal-mode changes need exclusive access and can bypass SQLite's
+        # busy timeout. Use a separate inode so macOS SQLite locks do not collide.
+        with self.path.with_suffix(".init.lock").open("a+b") as guard:
+            os.fchmod(guard.fileno(), 0o600)
+            fcntl.flock(guard, fcntl.LOCK_EX)
+            with self.connection() as db:
+                if db.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
+                    db.execute("PRAGMA journal_mode=WAL")
+                db.executescript(
+                    "CREATE TABLE IF NOT EXISTS workers (id TEXT PRIMARY KEY, updated REAL NOT NULL);"
+                    "CREATE TABLE IF NOT EXISTS requests ("
+                    "id TEXT PRIMARY KEY, owner TEXT NOT NULL, model TEXT, started REAL NOT NULL,"
+                    "finished REAL, status TEXT NOT NULL, input_est INTEGER, output_est INTEGER,"
+                    "input_actual INTEGER, output_actual INTEGER);"
+                    "CREATE INDEX IF NOT EXISTS requests_started ON requests(started);"
+                    "CREATE INDEX IF NOT EXISTS requests_status_owner ON requests(status,owner);"
+                )
         self.heartbeat()
 
     @contextmanager
@@ -143,7 +151,7 @@ class UsageStore:
         with self.connection() as db:
             db.execute(
                 "UPDATE requests SET status=?,finished=?,input_actual=?,output_actual=?,output_est=? "
-                "WHERE id=? AND status='in_flight'",
+                "WHERE id=? AND status IN ('in_flight','abandoned')",
                 (status, self.clock(), input_actual, output_actual, output_est, request_id),
             )
 

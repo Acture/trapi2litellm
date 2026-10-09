@@ -88,8 +88,9 @@ class StoreTests(unittest.TestCase):
 
     def test_two_processes_share_counts_without_lost_updates(self) -> None:
         context = multiprocessing.get_context("spawn")
+        fresh = self.path.with_name("fresh.sqlite3")
         processes = [
-            context.Process(target=write_worker, args=(str(self.path), str(index)))
+            context.Process(target=write_worker, args=(str(fresh), str(index)))
             for index in range(2)
         ]
         for process in processes:
@@ -105,9 +106,22 @@ class StoreTests(unittest.TestCase):
                     process.join(timeout=5)
                 process.close()
         # Child clocks use wall time; the reloaded observer uses the same clock.
-        stats = UsageStore(self.path).snapshot()["trapi/test"]
+        stats = UsageStore(fresh).snapshot()["trapi/test"]
         self.assertEqual(requests(stats)["total"], 24)
         self.assertEqual(tokens(stats)["reported"], {"input": 240, "output": 120})
+
+    def test_late_completion_replaces_stale_worker_estimates(self) -> None:
+        self.store.start("late")
+        self.store.identify("late", "model", 999)
+        self.now += 31
+        observer = UsageStore(self.path, lambda: self.now)
+        self.assertEqual(requests(observer.snapshot()["model"])["abandoned"], 1)
+        self.store.finish("late", "succeeded", 10, 20, 999)
+        stats = observer.snapshot()["model"]
+        self.assertEqual(requests(stats)["succeeded"], 1)
+        self.assertEqual(requests(stats)["abandoned"], 0)
+        self.assertEqual(tokens(stats)["reported"], {"input": 10, "output": 20})
+        self.assertEqual(tokens(stats)["estimated"], {"input": 0, "output": 0})
 
 
 class ModelTests(unittest.TestCase):

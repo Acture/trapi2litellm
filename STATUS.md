@@ -19,7 +19,7 @@ completed-window and in-flight estimates are separate. Unknown or multimodal
 usage remains explicit. No prompt, reply or key is persisted in the usage store.
 These observations do not establish billing, global quota remaining or enforcement.
 
-Local acceptance: Python ruff/format/ty and 31 offline tests; TypeScript strict
+Local acceptance: Python ruff/format/ty and 32 offline tests; TypeScript strict
 checking of the typed dashboard script, ESLint, Prettier and actionlint.
 Tests include two real processes sharing counts, rolling windows, interrupted
 workers, cancellation, fragmented streaming, privacy and authenticated data.
@@ -32,6 +32,15 @@ Installed wheel/sdist, persistent systemd and Debian lifecycle acceptance now
 probe the new page/assets, authenticated metadata and shared usage retention.
 Full CI acceptance for this change is pending; earlier accepted source below
 does not establish acceptance of this addition.
+
+First source `c9defb5`, [CI 37956948460](https://github.com/Acture/trapi2litellm/actions/runs/37956948460),
+passed both Python source jobs, dashboard checks, MSRV and amd64 installed
+acceptance. Arm64's sdist server failed at concurrent SQLite WAL initialization
+with `database is locked`; Debian jobs were skipped. Bootstrap now serializes
+workers using a separate advisory initialization lock and avoids changing an existing
+WAL journal. The multiprocessing regression starts from a fresh store. A late
+completion after a worker lease expires also replaces its estimates with reported
+usage. Subsequent full CI acceptance is pending.
 
 ## Final source acceptance (2026-10-07)
 
