@@ -59,7 +59,14 @@ fn dry_run_has_no_writes_or_python_invocation() {
 		"{}",
 		String::from_utf8_lossy(&result.stderr)
 	);
-	assert!(String::from_utf8_lossy(&result.stdout).contains("serve --port 4567"));
+	let preview: String = String::from_utf8_lossy(&result.stdout).into_owned();
+	assert!(if cfg!(target_os = "macos") {
+		preview.contains(
+			"<string>serve</string>\n\t\t<string>--port</string>\n\t\t<string>4567</string>",
+		)
+	} else {
+		preview.contains("serve --port 4567")
+	});
 	assert!(!config.exists());
 	assert!(!state.exists());
 }

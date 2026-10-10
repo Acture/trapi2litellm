@@ -10,6 +10,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 LOG = logging.getLogger(__name__)
 
@@ -27,6 +28,14 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str], capture: bool = F
     )
     LOG.info("Finished in %.1fs", time.monotonic() - started)
     return result.stdout or ""
+
+
+def launch_agents() -> dict[Path, int]:
+    """Modification times of the published trapi2litellm LaunchAgents."""
+    agents = Path.home() / "Library/LaunchAgents"
+    return {
+        path: path.stat().st_mtime_ns for path in agents.glob("io.github.acture.trapi2litellm.*")
+    }
 
 
 def main() -> None:
@@ -168,14 +177,20 @@ def main() -> None:
         tool_env["PATH"] = str(tool_root / "bin") + os.pathsep + tool_env["PATH"]
         run([command, "--version"], cwd=work, env=tool_env)
         preview = run([command, "deploy", "--dry-run"], cwd=work, env=tool_env, capture=True)
-        if f'ExecStart="{command}" serve' not in preview or "WorkingDirectory" in preview:
+        stable = (
+            f"<string>{escape(command)}</string>\n\t\t<string>serve</string>"
+            if sys.platform == "darwin"
+            else f'ExecStart="{command}" serve'
+        )
+        if stable not in preview or "WorkingDirectory" in preview:
             raise AssertionError("uv tool unit did not use its stable command")
         if args.tool_root:
+            published = launch_agents() if sys.platform == "darwin" else {}
             rejected = subprocess.run(
                 [command, "deploy"], cwd=work, env=tool_env, capture_output=True, text=True
             )
-            # A non-Linux host can reject systemd; a persistent Linux CI host
-            # must complete install-only deployment without Azure access.
+            # Persistent Linux and macOS hosts must complete install-only
+            # deployment without Azure access; other hosts are refused.
             if sys.platform.startswith("linux"):
                 if rejected.returncode:
                     print(rejected.stderr, file=sys.stderr)
@@ -195,6 +210,18 @@ def main() -> None:
                     cwd=root,
                     env={**tool_env, "TRAPI2LITELLM_ACCEPTANCE_ENTRY": command},
                 )
+            elif sys.platform == "darwin":
+                if rejected.returncode:
+                    print(rejected.stderr, file=sys.stderr)
+                rejected.check_returncode()
+                staged = sorted(
+                    (Path(tool_env["TRAPI2LITELLM_CONFIG_DIR"]) / "launchd").glob("*.plist")
+                )
+                if len(staged) != 2:
+                    raise AssertionError(f"Install-only deployment staged {staged}")
+                run(["/usr/bin/plutil", "-lint", *map(str, staged)], cwd=work, env=tool_env)
+                if launch_agents() != published:
+                    raise AssertionError("Install-only deployment changed LaunchAgents")
             elif "non-persistent" in rejected.stderr:
                 raise AssertionError(rejected.stderr)
         LOG.info("Accepted installed wheel/sdist, uvx refusal and uv tool entry")

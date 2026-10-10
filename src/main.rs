@@ -6,12 +6,17 @@ mod runtime;
 mod settings;
 mod sync;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
+use deploy::{
+	Job,
+	launchd::{self, LaunchdManager, LaunchdService, SystemLaunchHost},
+	systemd::{SystemHost, SystemdManager},
+};
 use runtime::{PythonRuntime, Runtime, RuntimeError};
 use serde_json::{Value, json};
 use settings::{Overrides, Settings};
-use std::{path::PathBuf, process::ExitCode};
+use std::{env, path::PathBuf, process::ExitCode};
 
 #[derive(Parser)]
 #[command(
@@ -72,6 +77,65 @@ impl Runtime for LazyRuntime {
 	}
 }
 
+/// The per-user launchd domain: LaunchAgents and logs under the user's Library.
+fn launchd_manager(settings: &Settings) -> Result<LaunchdManager<'_, SystemLaunchHost>> {
+	let home: PathBuf = env::var_os("HOME").context("HOME is required")?.into();
+	// A relative HOME would name a LaunchAgents directory below the working directory, which
+	// launchd never scans at login.
+	ensure!(home.is_absolute(), "HOME must be an absolute path");
+	LaunchdManager::new(
+		&SystemLaunchHost,
+		settings,
+		home.join("Library/LaunchAgents"),
+		home.join("Library/Logs/trapi2litellm"),
+		launchd::LABEL_PREFIX,
+	)
+}
+
+fn deploy(settings: &Settings, options: &deploy::DeployOptions) -> Result<()> {
+	if cfg!(target_os = "linux") {
+		deploy::deploy(
+			&LazyRuntime,
+			&sync::SystemService { settings },
+			&SystemdManager::new(&SystemHost, settings),
+			settings,
+			options,
+		)
+	} else if cfg!(target_os = "macos") {
+		let manager: LaunchdManager<'_, SystemLaunchHost> = launchd_manager(settings)?;
+		deploy::deploy(
+			&LazyRuntime,
+			&LaunchdService { manager: &manager },
+			&manager,
+			settings,
+			options,
+		)
+	} else {
+		bail!("Deployment supports Linux with systemd --user and macOS with launchd only")
+	}
+}
+
+fn synchronize(settings: &Settings, bootstrap: bool, no_reload: bool) -> Result<sync::SyncResult> {
+	if cfg!(target_os = "macos") {
+		let manager: LaunchdManager<'_, SystemLaunchHost> = launchd_manager(settings)?;
+		sync::synchronize(
+			&LazyRuntime,
+			&LaunchdService { manager: &manager },
+			settings,
+			bootstrap,
+			no_reload,
+		)
+	} else {
+		sync::synchronize(
+			&LazyRuntime,
+			&sync::SystemService { settings },
+			settings,
+			bootstrap,
+			no_reload,
+		)
+	}
+}
+
 fn run(cli: Cli) -> Result<()> {
 	match cli.command {
 		Commands::Deploy {
@@ -94,41 +158,38 @@ fn run(cli: Cli) -> Result<()> {
 				enable_linger,
 				dry_run,
 			};
-			deploy::deploy(
-				&LazyRuntime,
-				&sync::SystemService {
-					settings: &settings,
-				},
-				&deploy::systemd::SystemdManager::new(&deploy::systemd::SystemHost, &settings),
-				&settings,
-				&options,
-			)
+			deploy(&settings, &options)
 		}
 		Commands::Serve { port } => {
 			let settings: Settings = Settings::from_env(Overrides {
 				port,
 				..Overrides::default()
 			})?;
-			PythonRuntime::discover()?.exec("serve", &settings)
+			PythonRuntime::discover()?.exec("serve", &settings, &[])
 		}
 		Commands::SmokeTest => {
 			let settings: Settings = Settings::from_env(Overrides::default())?;
-			PythonRuntime::discover()?.exec("smoke-test", &settings)
+			let python: PythonRuntime = PythonRuntime::discover()?;
+			if cfg!(target_os = "macos") {
+				let manager: LaunchdManager<'_, SystemLaunchHost> = launchd_manager(&settings)?;
+				python.exec(
+					"smoke-test",
+					&settings,
+					&[
+						("TRAPI2LITELLM_SERVICE_MANAGER", "launchd"),
+						("TRAPI2LITELLM_SERVICE_LABEL", manager.label(Job::Gateway)),
+					],
+				)
+			} else {
+				python.exec("smoke-test", &settings, &[])
+			}
 		}
 		Commands::Sync {
 			bootstrap,
 			no_reload,
 		} => {
 			let settings: Settings = Settings::from_env(Overrides::default())?;
-			let result: Result<sync::SyncResult> = sync::synchronize(
-				&LazyRuntime,
-				&sync::SystemService {
-					settings: &settings,
-				},
-				&settings,
-				bootstrap,
-				no_reload,
-			);
+			let result: Result<sync::SyncResult> = synchronize(&settings, bootstrap, no_reload);
 			match result {
 				Ok(result) => {
 					println!("{}", serde_json::to_string(&result)?);

@@ -1,3 +1,4 @@
+pub mod launchd;
 pub mod systemd;
 mod transaction;
 
@@ -13,6 +14,13 @@ use std::{
 
 pub const MARKER: &str = "# Managed by trapi2litellm\n";
 const REMEDY: &str = "Install persistently with uv tool install, Homebrew or the Debian package; use --entry-point to select that command";
+/// Gateway-only environment that every manager sets after `CONFIG_FILE_PATH`.
+const GATEWAY_ENVIRONMENT: [(&str, &str); 4] = [
+	("LITELLM_MODE", "PRODUCTION"),
+	("LITELLM_LOG", "WARNING"),
+	("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential"),
+	("AZURE_CREDENTIAL", "DefaultAzureCredential"),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Job {
@@ -28,8 +36,8 @@ impl Job {
 ///
 /// `Runtime` is systemd's `enable --runtime`. A manager that cannot express an enablement reports
 /// only `Disabled` or `Persistent` and fails closed on anything else, as systemd does for an
-/// unsupported `UnitFileState`: launchd reports `Persistent` when the loaded plist is present and
-/// no `launchctl disable` override applies, and bails when file presence and override disagree.
+/// unsupported `UnitFileState`: launchd reports `Persistent` when the LaunchAgents plist is
+/// present, and fails closed on a `launchctl disable` override, which deploy never changes.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Enablement {
 	#[default]
@@ -58,8 +66,11 @@ pub trait Linger {
 /// ownership-checks and restores it with the installed definitions.
 pub trait ServiceManager {
 	/// Directory deploy installs rendered definitions into, together with their `.previous`
-	/// backups and atomic-write temporary files.
+	/// backups and the atomic-write temporary files of every definition, including the loaded
+	/// copies published elsewhere.
 	fn definitions_dir(&self) -> &Path;
+	/// What `definitions_dir` holds, as user-facing messages name it.
+	fn definitions_kind(&self) -> &str;
 	/// File name of the installed definition that controls a job.
 	fn definition(&self, job: Job) -> &str;
 	/// File the manager loads a job from: the installed definition itself, or the copy that
@@ -69,7 +80,8 @@ pub trait ServiceManager {
 	fn render(&self, entry: &Path) -> Result<BTreeMap<String, String>>;
 	/// Whether an installed or loaded definition may be replaced with new content.
 	fn is_managed(&self, old: &str, new: &str) -> bool;
-	fn check_available(&self) -> Result<()>;
+	/// Fails when the manager cannot install definitions or, with `start`, activate jobs.
+	fn check_available(&self, start: bool) -> Result<()>;
 	fn preflight(&self, definitions: &BTreeMap<String, String>) -> Result<()>;
 	/// Makes the manager pick up definitions installed into `definitions_dir`.
 	fn definitions_changed(&self) -> Result<()>;
@@ -78,12 +90,13 @@ pub trait ServiceManager {
 	fn outdated(&self, definitions: &BTreeMap<String, String>) -> Result<BTreeSet<Job>>;
 	/// Activation and enablement of a job. `active` means armed: the gateway is running, or the
 	/// sync schedule is set (an active systemd timer; a loaded launchd calendar job, whose idle
-	/// state is loaded but not running). States the transaction cannot restore fail closed, such
-	/// as a systemd unit that is `activating` or a launchd gateway that is loaded but not running.
+	/// state is loaded but not running). A launchd gateway that is loaded but not running is not
+	/// armed: KeepAlive restarts it only after a failure. States the transaction cannot restore
+	/// fail closed, such as a systemd unit that is `activating` or a launchd `spawn scheduled`.
 	fn state(&self, job: Job) -> Result<UnitState>;
 	/// Publishes every installed definition where the manager loads it, enables every job and
-	/// arms those that are not armed. Never restarts an armed job: the transaction restarts the
-	/// `outdated` ones and reloads an up-to-date gateway.
+	/// arms those that are not armed from their new definitions. Never restarts an armed job: the
+	/// transaction restarts the `outdated` ones and reloads an up-to-date gateway.
 	fn activate_all(&self) -> Result<()>;
 	/// Arms a job again from its loaded definition, stopping it first if it is armed and loading
 	/// the definition if the manager has unloaded it.
@@ -101,6 +114,24 @@ pub trait ServiceManager {
 	fn same_target(&self, old_gateway: &str) -> Result<bool>;
 	/// Keeps jobs running without a login session, or explains why the manager cannot.
 	fn linger(&self) -> Result<&dyn Linger>;
+}
+
+/// Environment both jobs get on top of the settings, whatever the manager.
+fn job_environment(settings: &Settings) -> BTreeMap<String, String> {
+	let mut environment: BTreeMap<String, String> = settings.environment();
+	environment.extend(BTreeMap::from([
+		("LITELLM_LOCAL_MODEL_COST_MAP".into(), "True".into()),
+		("PYTHONDONTWRITEBYTECODE".into(), "1".into()),
+		(
+			"NO_PROXY".into(),
+			"127.0.0.1,localhost,169.254.169.254".into(),
+		),
+		(
+			"no_proxy".into(),
+			"127.0.0.1,localhost,169.254.169.254".into(),
+		),
+	]));
+	environment
 }
 
 fn marked(old: &str) -> bool {
@@ -298,6 +329,31 @@ fn runtime_paths(settings: &Settings, entry: &Path) -> Result<()> {
 	Ok(())
 }
 
+/// Refuses to replace an installed or loaded definition, or a client file, that deploy does not
+/// manage.
+fn check_ownership(
+	manager: &impl ServiceManager,
+	settings: &Settings,
+	definitions: &BTreeMap<String, String>,
+	clients: &BTreeMap<String, String>,
+) -> Result<()> {
+	for (name, content) in definitions {
+		check_managed(&manager.definitions_dir().join(name), |old| {
+			manager.is_managed(old, content)
+		})?;
+	}
+	for job in Job::ALL {
+		let content: &str = &definitions[manager.definition(job)];
+		check_managed(&manager.loaded_definition(job), |old| {
+			manager.is_managed(old, content)
+		})?;
+	}
+	for name in clients.keys() {
+		check_managed(&settings.config_dir.join(name), marked)?;
+	}
+	Ok(())
+}
+
 pub struct DeployOptions {
 	pub entry: PathBuf,
 	pub start: bool,
@@ -335,29 +391,12 @@ pub fn deploy(
 		bail!("Refusing a non-persistent entry point: {problem}. {REMEDY}");
 	}
 	ensure!(
-		cfg!(target_os = "linux"),
-		"Deployment currently supports Linux with systemd --user only"
-	);
-	ensure!(
 		options.entry.is_file() && fs::metadata(&options.entry)?.permissions().mode() & 0o111 != 0,
 		"Entry point is not executable. {REMEDY}"
 	);
-	manager.check_available()?;
+	manager.check_available(options.start)?;
 	let clients: BTreeMap<String, String> = client_files(settings);
-	for (name, content) in &definitions {
-		check_managed(&manager.definitions_dir().join(name), |old| {
-			manager.is_managed(old, content)
-		})?;
-	}
-	for job in Job::ALL {
-		let content: &str = &definitions[manager.definition(job)];
-		check_managed(&manager.loaded_definition(job), |old| {
-			manager.is_managed(old, content)
-		})?;
-	}
-	for name in clients.keys() {
-		check_managed(&settings.config_dir.join(name), marked)?;
-	}
+	check_ownership(manager, settings, &definitions, &clients)?;
 	manager.preflight(&definitions)?;
 	transaction::apply_deployment(
 		runtime,
@@ -386,6 +425,37 @@ mod tests {
 		assert_eq!(
 			fs::read_to_string(root.path().join("example.service.previous")).unwrap(),
 			format!("{MARKER}first\n")
+		);
+	}
+
+	#[test]
+	fn ownership_covers_loaded_launch_agents() {
+		let root: tempfile::TempDir = tempfile::tempdir().unwrap();
+		let settings: Settings = crate::settings::test_settings(root.path());
+		let host: launchd::fixture::LaunchdFixture = launchd::fixture::LaunchdFixture::default();
+		let manager: launchd::LaunchdManager<'_, launchd::fixture::LaunchdFixture> =
+			launchd::LaunchdManager::new(
+				&host,
+				&settings,
+				root.path().join("LaunchAgents"),
+				root.path().join("Logs"),
+				"io.github.acture.trapi2litellm.test",
+			)
+			.unwrap();
+		let definitions: BTreeMap<String, String> =
+			manager.render(Path::new("/bin/trapi2litellm")).unwrap();
+		let clients: BTreeMap<String, String> = client_files(&settings);
+		check_ownership(&manager, &settings, &definitions, &clients).unwrap();
+		let agent: PathBuf = manager.loaded_definition(Job::Gateway);
+		fs::create_dir_all(agent.parent().unwrap()).unwrap();
+		fs::write(&agent, &definitions[manager.definition(Job::Gateway)]).unwrap();
+		check_ownership(&manager, &settings, &definitions, &clients).unwrap();
+		fs::write(&agent, "<?xml version=\"1.0\"?>\n<plist/>\n").unwrap();
+		assert!(
+			check_ownership(&manager, &settings, &definitions, &clients)
+				.unwrap_err()
+				.to_string()
+				.contains("Refusing to overwrite unmanaged file")
 		);
 	}
 }

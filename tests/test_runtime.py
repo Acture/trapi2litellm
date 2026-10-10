@@ -300,9 +300,27 @@ class RuntimeTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertIn("serve --port 4567", result.stdout)
+            expected = (
+                "<string>serve</string>\n\t\t<string>--port</string>\n\t\t<string>4567</string>"
+                if sys.platform == "darwin"
+                else "serve --port 4567"
+            )
+            self.assertIn(expected, result.stdout)
             self.assertFalse((root / "config").exists())
             self.assertFalse((root / "state").exists())
+
+    def test_smoke_test_reads_top_level_launchd_pid(self) -> None:
+        with patch.dict(
+            os.environ, {"TRAPI2LITELLM_PORT": "4567", "TRAPI2LITELLM_STATE_DIR": "/nonexistent"}
+        ):
+            from trapi2litellm import smoke_test
+        running = (
+            "gui/501/io.github.acture.trapi2litellm.gateway = {\n\tstate = running\n"
+            '\tendpoints = {\n\t\t"x" = {\n\t\t\tpid = 1\n\t\t}\n\t}\n\tpid = 4242\n}\n'
+        )
+        self.assertEqual(smoke_test.launchd_pid(running), "4242")
+        with self.assertRaises(RuntimeError):
+            smoke_test.launchd_pid("gui/501/x = {\n\tstate = not running\n}\n")
 
 
 if __name__ == "__main__":

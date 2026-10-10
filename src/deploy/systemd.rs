@@ -1,4 +1,7 @@
-use super::{Enablement, Job, Linger, MARKER, ServiceManager, UnitState};
+use super::{
+	Enablement, GATEWAY_ENVIRONMENT, Job, Linger, MARKER, ServiceManager, UnitState,
+	job_environment,
+};
 use crate::{
 	process,
 	settings::{SERVICE, Settings},
@@ -181,20 +184,7 @@ fn unit_env_file(path: &Path) -> Result<String> {
 
 pub(super) fn render_units(entry: &Path, settings: &Settings) -> Result<BTreeMap<String, String>> {
 	let command: String = unit_quote(&entry.to_string_lossy())?.replace('$', "$$");
-	let mut environment: BTreeMap<String, String> = settings.environment();
-	environment.extend(BTreeMap::from([
-		("LITELLM_LOCAL_MODEL_COST_MAP".into(), "True".into()),
-		("PYTHONDONTWRITEBYTECODE".into(), "1".into()),
-		(
-			"NO_PROXY".into(),
-			"127.0.0.1,localhost,169.254.169.254".into(),
-		),
-		(
-			"no_proxy".into(),
-			"127.0.0.1,localhost,169.254.169.254".into(),
-		),
-	]));
-	let shared: String = environment
+	let shared: String = job_environment(settings)
 		.iter()
 		.map(|(key, value)| {
 			unit_quote(&format!("{key}={value}")).map(|quoted| format!("Environment={quoted}\n"))
@@ -207,9 +197,12 @@ pub(super) fn render_units(entry: &Path, settings: &Settings) -> Result<BTreeMap
 		"CONFIG_FILE_PATH={}",
 		settings.config_path().display()
 	))?;
+	let gateway_only: String = GATEWAY_ENVIRONMENT
+		.map(|(key, value)| format!("Environment={key}={value}\n"))
+		.concat();
 	let port: u16 = settings.port;
 	let gateway: String = format!(
-		"{MARKER}[Unit]\nDescription=Local TRAPI LiteLLM gateway (Managed Identity)\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n[Service]\nType=simple\nEnvironmentFile={key_file}\n{shared}Environment={config}\nEnvironment=LITELLM_MODE=PRODUCTION\nEnvironment=LITELLM_LOG=WARNING\nEnvironment=AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential\nEnvironment=AZURE_CREDENTIAL=DefaultAzureCredential\nExecStart={command} serve --port {port}\nExecReload=/bin/kill -HUP $MAINPID\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=930\nKillMode=mixed\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\n\n[Install]\nWantedBy=default.target\n"
+		"{MARKER}[Unit]\nDescription=Local TRAPI LiteLLM gateway (Managed Identity)\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n[Service]\nType=simple\nEnvironmentFile={key_file}\n{shared}Environment={config}\n{gateway_only}ExecStart={command} serve --port {port}\nExecReload=/bin/kill -HUP $MAINPID\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=930\nKillMode=mixed\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\n\n[Install]\nWantedBy=default.target\n"
 	);
 	let sync: String = format!(
 		"{MARKER}[Unit]\nDescription=Discover TRAPI models and update the local LiteLLM gateway\n\n[Service]\nType=oneshot\n{shared}ExecStart={command} sync\nTimeoutStartSec=240\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\n"
@@ -258,6 +251,9 @@ impl<H: Host> ServiceManager for SystemdManager<'_, H> {
 	fn definitions_dir(&self) -> &Path {
 		&self.unit_dir
 	}
+	fn definitions_kind(&self) -> &str {
+		"units"
+	}
 	fn definition(&self, job: Job) -> &str {
 		unit(job)
 	}
@@ -272,7 +268,8 @@ impl<H: Host> ServiceManager for SystemdManager<'_, H> {
 			|| legacy_description(new)
 				.is_some_and(|description| old.lines().any(|line| line == description))
 	}
-	fn check_available(&self) -> Result<()> {
+	fn check_available(&self, _start: bool) -> Result<()> {
+		// Install-only also needs the user manager for daemon-reload.
 		control(self.host, &["show-environment"])
 	}
 	fn preflight(&self, definitions: &BTreeMap<String, String>) -> Result<()> {

@@ -12,6 +12,10 @@ import httpx
 LOCAL_URL: str = "http://127.0.0.1:" + os.environ["TRAPI2LITELLM_PORT"]
 SERVICE: str = "litellm-trapi.service"
 STATE_DIR: Path = Path(os.environ["TRAPI2LITELLM_STATE_DIR"])
+# The native command passes launchd and the gateway label on macOS.
+SERVICE_MANAGER: str = os.environ.get("TRAPI2LITELLM_SERVICE_MANAGER", "systemd")
+LAUNCHCTL: str = "/bin/launchctl"
+LAUNCHCTL_TIMEOUT: int = 60
 
 
 class ToolFunction(TypedDict):
@@ -55,7 +59,49 @@ def response_text(response: ApiResponse) -> str:
     return content.strip()
 
 
+def launchd_target() -> str:
+    return f"gui/{os.getuid()}/{os.environ['TRAPI2LITELLM_SERVICE_LABEL']}"
+
+
+def launchd_pid(output: str) -> str:
+    """Process ID from `launchctl print`; nested blocks are indented further."""
+    pids = [
+        line.removeprefix("\tpid = ") for line in output.splitlines() if line.startswith("\tpid = ")
+    ]
+    if len(pids) != 1 or not pids[0].isdigit():
+        raise RuntimeError("launchctl print did not report one running gateway process")
+    return pids[0]
+
+
+def gateway_pid() -> str:
+    if SERVICE_MANAGER == "launchd":
+        output = subprocess.check_output(
+            [LAUNCHCTL, "print", launchd_target()], text=True, timeout=LAUNCHCTL_TIMEOUT
+        )
+        return launchd_pid(output)
+    return subprocess.check_output(
+        ["systemctl", "--user", "show", SERVICE, "-p", "MainPID", "--value"],
+        text=True,
+    ).strip()
+
+
+def reload_gateway() -> None:
+    if SERVICE_MANAGER == "launchd":
+        subprocess.run(
+            [LAUNCHCTL, "kill", "SIGHUP", launchd_target()],
+            check=True,
+            timeout=LAUNCHCTL_TIMEOUT,
+        )
+    else:
+        subprocess.run(["systemctl", "--user", "reload", SERVICE], check=True)
+
+
 def main() -> None:
+    if SERVICE_MANAGER not in ("systemd", "launchd"):
+        raise ValueError(f"Unsupported service manager {SERVICE_MANAGER!r}")
+    # Fail before any billable check rather than at the reload check.
+    if SERVICE_MANAGER == "launchd" and not os.environ.get("TRAPI2LITELLM_SERVICE_LABEL"):
+        raise ValueError("TRAPI2LITELLM_SERVICE_LABEL is required with launchd")
     key: str = os.environ["LITELLM_MASTER_KEY"]
     checks = []
 
@@ -199,10 +245,7 @@ def main() -> None:
         assert text.strip() == "OK"
         record("responses_api", output=text)
 
-        master_before = subprocess.check_output(
-            ["systemctl", "--user", "show", SERVICE, "-p", "MainPID", "--value"],
-            text=True,
-        ).strip()
+        master_before = gateway_pid()
         reloaded = False
         done = False
         text = ""
@@ -230,13 +273,10 @@ def main() -> None:
                     for choice in chunk.get("choices", []):
                         text += choice.get("delta", {}).get("content") or ""
                     if text and not reloaded:
-                        subprocess.run(["systemctl", "--user", "reload", SERVICE], check=True)
+                        reload_gateway()
                         reloaded = True
         assert reloaded and done and "100" in text
-        master_after = subprocess.check_output(
-            ["systemctl", "--user", "show", SERVICE, "-p", "MainPID", "--value"],
-            text=True,
-        ).strip()
+        master_after = gateway_pid()
         assert master_after == master_before
         record("reload_during_stream", stream_completed=done, master_pid_unchanged=True)
 

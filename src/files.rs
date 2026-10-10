@@ -14,10 +14,19 @@ pub fn private_directory(path: &Path) -> Result<()> {
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+	atomic_write_in(
+		path,
+		bytes,
+		path.parent().context("File has no parent directory")?,
+	)
+}
+
+/// Writes through a temporary file in `temporary_dir`, which must share the volume of `path`.
+pub fn atomic_write_in(path: &Path, bytes: &[u8], temporary_dir: &Path) -> Result<()> {
 	let parent: &Path = path.parent().context("File has no parent directory")?;
 	let mut temporary: tempfile::NamedTempFile = tempfile::Builder::new()
 		.prefix(".trapi2litellm-")
-		.tempfile_in(parent)?;
+		.tempfile_in(temporary_dir)?;
 	temporary
 		.as_file()
 		.set_permissions(Permissions::from_mode(0o600))?;

@@ -101,7 +101,14 @@ impl PythonRuntime {
 		json_request(&mut self.command(operation), request, timeout)
 	}
 
-	pub fn exec(&self, operation: &str, settings: &Settings) -> Result<()> {
+	/// Replaces this process with a Python operation; `environment` adds variables on top of the
+	/// settings.
+	pub fn exec(
+		&self,
+		operation: &str,
+		settings: &Settings,
+		environment: &[(&str, &str)],
+	) -> Result<()> {
 		let mut command: Command = self.command(operation);
 		let config_path: PathBuf = match env::var_os("CONFIG_FILE_PATH") {
 			Some(value) => {
@@ -118,6 +125,7 @@ impl PythonRuntime {
 		};
 		command
 			.envs(settings.environment())
+			.envs(environment.iter().copied())
 			.env("CONFIG_FILE_PATH", config_path);
 		for (key, default) in [
 			("LITELLM_LOCAL_MODEL_COST_MAP", "True"),
