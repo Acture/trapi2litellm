@@ -151,6 +151,40 @@ def main() -> None:
         assert response_text(data) == "OK"
         record("gpt52_chat", model=data["model"], usage=data.get("usage"))
 
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "add",
+                    "description": "Add two integers.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "a": {"type": "integer"},
+                            "b": {"type": "integer"},
+                        },
+                        "required": ["a", "b"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        ]
+        # A gateway that maps parameters for an unknown model can drop tool_choice silently.
+        data = post(
+            "/v1/chat/completions",
+            {
+                "model": "trapi/gpt-5.2_2025-12-11",
+                "messages": [{"role": "user", "content": "Use add to calculate 2 + 3."}],
+                "tools": tools,
+                "tool_choice": {"type": "function", "function": {"name": "add"}},
+                "max_completion_tokens": 128,
+                "reasoning_effort": "none",
+            },
+        )
+        calls = data["choices"][0]["message"]["tool_calls"]
+        assert len(calls) == 1 and calls[0]["function"]["name"] == "add"
+        record("gpt52_forced_tool_call", model=data["model"])
+
         text = ""
         done = False
         with client.stream(
@@ -178,24 +212,6 @@ def main() -> None:
             {
                 "role": "user",
                 "content": "Use add to calculate 2 + 3. Then reply with only the result.",
-            }
-        ]
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "add",
-                    "description": "Add two integers.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "a": {"type": "integer"},
-                            "b": {"type": "integer"},
-                        },
-                        "required": ["a", "b"],
-                        "additionalProperties": False,
-                    },
-                },
             }
         ]
         data = post(

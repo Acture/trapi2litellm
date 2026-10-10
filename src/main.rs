@@ -2,6 +2,7 @@ mod catalog;
 mod deploy;
 mod files;
 mod process;
+mod relay;
 mod runtime;
 mod settings;
 mod sync;
@@ -15,13 +16,13 @@ use deploy::{
 };
 use runtime::{PythonRuntime, Runtime, RuntimeError};
 use serde_json::{Value, json};
-use settings::{Overrides, Settings};
+use settings::{Mode, Overrides, Settings};
 use std::{env, path::PathBuf, process::ExitCode};
 
 #[derive(Parser)]
 #[command(
 	version,
-	about = "Managed-identity TRAPI discovery and a loopback LiteLLM gateway"
+	about = "TRAPI discovery (Managed Identity or gateway relay) and a loopback LiteLLM gateway"
 )]
 struct Cli {
 	#[command(subcommand)]
@@ -29,7 +30,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
-	/// Install user units; --start explicitly enables and starts services
+	/// Install user services (systemd units or launchd agents); --start explicitly enables and
+	/// starts them
 	Deploy {
 		#[arg(long)]
 		config_dir: Option<PathBuf>,
@@ -62,11 +64,15 @@ enum Commands {
 	SmokeTest,
 }
 
-// Discovery is lazy: install-only and dry-run never inspect or invoke Python.
+// Discovery is lazy: install-only and dry-run never inspect or invoke Python, and gateway mode
+// fetches the relayed catalog natively.
 struct LazyRuntime;
 impl Runtime for LazyRuntime {
 	fn catalog(&self, settings: &Settings) -> Result<Value> {
-		PythonRuntime::discover()?.catalog(settings)
+		match settings.mode {
+			Mode::ManagedIdentity => PythonRuntime::discover()?.catalog(settings),
+			Mode::Gateway { .. } => relay::catalog(settings),
+		}
 	}
 	fn validate(
 		&self,
@@ -92,7 +98,22 @@ fn launchd_manager(settings: &Settings) -> Result<LaunchdManager<'_, SystemLaunc
 	)
 }
 
+/// Fails when this platform cannot run the configured mode: macOS has no Azure Managed Identity.
+fn check_platform(settings: &Settings) -> Result<()> {
+	ensure!(
+		!(cfg!(target_os = "macos") && settings.mode == Mode::ManagedIdentity),
+		"macOS has no Azure Managed Identity endpoint; set TRAPI2LITELLM_MODE=gateway and TRAPI2LITELLM_UPSTREAM_URL"
+	);
+	Ok(())
+}
+
 fn deploy(settings: &Settings, options: &deploy::DeployOptions) -> Result<()> {
+	if let Err(refusal) = check_platform(settings) {
+		if !options.dry_run {
+			return Err(refusal);
+		}
+		eprintln!("Note: deployment would refuse this mode: {refusal}");
+	}
 	if cfg!(target_os = "linux") {
 		deploy::deploy(
 			&LazyRuntime,
@@ -165,6 +186,7 @@ fn run(cli: Cli) -> Result<()> {
 				port,
 				..Overrides::default()
 			})?;
+			check_platform(&settings)?;
 			PythonRuntime::discover()?.exec("serve", &settings, &[])
 		}
 		Commands::SmokeTest => {
@@ -189,6 +211,8 @@ fn run(cli: Cli) -> Result<()> {
 			no_reload,
 		} => {
 			let settings: Settings = Settings::from_env(Overrides::default())?;
+			// Refuse before the lock or any state, including sync-error.json, is written.
+			check_platform(&settings)?;
 			let result: Result<sync::SyncResult> = synchronize(&settings, bootstrap, no_reload);
 			match result {
 				Ok(result) => {
@@ -203,7 +227,8 @@ fn run(cli: Cli) -> Result<()> {
 							result["http_status"] = json!(status);
 						}
 					} else {
-						result["message"] = json!(error.to_string());
+						// The cause tells a refused SSH forward from an unreachable upstream.
+						result["message"] = json!(format!("{error:#}"));
 					}
 					if settings.state_dir.exists() {
 						files::atomic_write(
@@ -224,7 +249,7 @@ fn main() -> ExitCode {
 	match run(cli) {
 		Ok(()) => ExitCode::SUCCESS,
 		Err(error) => {
-			eprintln!("{error}");
+			eprintln!("{error:#}");
 			ExitCode::FAILURE
 		}
 	}

@@ -139,14 +139,24 @@ def main() -> None:
         ]
         run([*uvx, "--version"], cwd=work, env=env)
         run([*uvx, "deploy", "--dry-run"], cwd=work, env=env, capture=True)
+        # macOS deploys only in gateway mode; install-only needs no upstream key.
+        relay: dict[str, str] = (
+            {
+                "TRAPI2LITELLM_MODE": "gateway",
+                "TRAPI2LITELLM_UPSTREAM_URL": "http://127.0.0.1:14000",
+            }
+            if sys.platform == "darwin"
+            else {}
+        )
         rejected = subprocess.run(
-            [*uvx, "deploy"], cwd=work, env=env, capture_output=True, text=True
+            [*uvx, "deploy"], cwd=work, env={**env, **relay}, capture_output=True, text=True
         )
         if rejected.returncode == 0 or "non-persistent" not in rejected.stderr:
             raise AssertionError(f"uvx deployment was not refused: {rejected.stderr}")
         tool_root = args.tool_root.resolve() if args.tool_root else work / "tools"
         tool_env = {
             **env,
+            **relay,
             "UV_TOOL_DIR": str(tool_root / "envs"),
             "UV_TOOL_BIN_DIR": str(tool_root / "bin"),
         }

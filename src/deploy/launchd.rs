@@ -1,5 +1,5 @@
 use super::{
-	Enablement, GATEWAY_ENVIRONMENT, Job, Linger, ServiceManager, UnitState, job_environment,
+	Enablement, Job, Linger, ServiceManager, UnitState, gateway_environment, job_environment,
 };
 use crate::{
 	files, process,
@@ -305,12 +305,16 @@ fn render_plists(
 	let gateway_log: String = path_string(&logs_dir.join("gateway.log"))?;
 	let sync_log: String = path_string(&logs_dir.join("sync.log"))?;
 	let shared: BTreeMap<String, String> = job_environment(settings);
-	let mut gateway_environment: BTreeMap<String, String> = shared.clone();
-	gateway_environment.insert(
+	let mut gateway_variables: BTreeMap<String, String> = shared.clone();
+	gateway_variables.insert(
 		"CONFIG_FILE_PATH".into(),
 		settings.config_path().display().to_string(),
 	);
-	gateway_environment.extend(GATEWAY_ENVIRONMENT.map(|(key, value)| (key.into(), value.into())));
+	gateway_variables.extend(
+		gateway_environment(settings)
+			.into_iter()
+			.map(|(key, value)| (key.into(), value.into())),
+	);
 	let gateway: Plist = Plist::dict([
 		("Label", Plist::string(&labels[0])),
 		(
@@ -327,7 +331,7 @@ fn render_plists(
 		("Umask", Plist::Integer(0o077)),
 		("StandardOutPath", Plist::string(&gateway_log)),
 		("StandardErrorPath", Plist::string(&gateway_log)),
-		("EnvironmentVariables", environment(gateway_environment)),
+		("EnvironmentVariables", environment(gateway_variables)),
 	]);
 	let sync: Plist = Plist::dict([
 		("Label", Plist::string(&labels[1])),

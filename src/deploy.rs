@@ -2,7 +2,12 @@ pub mod launchd;
 pub mod systemd;
 mod transaction;
 
-use crate::{files, runtime::Runtime, settings::Settings, sync::Service};
+use crate::{
+	files,
+	runtime::Runtime,
+	settings::{Mode, Settings},
+	sync::Service,
+};
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 use std::{
@@ -14,13 +19,14 @@ use std::{
 
 pub const MARKER: &str = "# Managed by trapi2litellm\n";
 const REMEDY: &str = "Install persistently with uv tool install, Homebrew or the Debian package; use --entry-point to select that command";
-/// Gateway-only environment that every manager sets after `CONFIG_FILE_PATH`.
-const GATEWAY_ENVIRONMENT: [(&str, &str); 4] = [
-	("LITELLM_MODE", "PRODUCTION"),
-	("LITELLM_LOG", "WARNING"),
-	("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential"),
-	("AZURE_CREDENTIAL", "DefaultAzureCredential"),
-];
+/// Gateway-only environment that every manager sets after `CONFIG_FILE_PATH`, in this order.
+fn gateway_environment(settings: &Settings) -> Vec<(&'static str, &'static str)> {
+	[("LITELLM_MODE", "PRODUCTION"), ("LITELLM_LOG", "WARNING")]
+		.iter()
+		.chain(settings.credential_environment())
+		.copied()
+		.collect()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Job {
@@ -118,18 +124,19 @@ pub trait ServiceManager {
 
 /// Environment both jobs get on top of the settings, whatever the manager.
 fn job_environment(settings: &Settings) -> BTreeMap<String, String> {
+	let mut no_proxy: String = "127.0.0.1,localhost,169.254.169.254".into();
+	// The upstream key travels in plain HTTP to a loopback forward; no proxy may carry it.
+	if let Some(host) = settings.upstream_host()
+		&& !no_proxy.split(',').any(|entry| entry == host)
+	{
+		no_proxy = format!("{no_proxy},{host}");
+	}
 	let mut environment: BTreeMap<String, String> = settings.environment();
 	environment.extend(BTreeMap::from([
 		("LITELLM_LOCAL_MODEL_COST_MAP".into(), "True".into()),
 		("PYTHONDONTWRITEBYTECODE".into(), "1".into()),
-		(
-			"NO_PROXY".into(),
-			"127.0.0.1,localhost,169.254.169.254".into(),
-		),
-		(
-			"no_proxy".into(),
-			"127.0.0.1,localhost,169.254.169.254".into(),
-		),
+		("NO_PROXY".into(), no_proxy.clone()),
+		("no_proxy".into(), no_proxy),
 	]));
 	environment
 }
@@ -167,7 +174,7 @@ fn managed_write(path: &Path, content: &str, managed: impl Fn(&str) -> bool) -> 
 
 pub fn client_files(settings: &Settings) -> BTreeMap<String, String> {
 	let path: String = settings.key_path().to_string_lossy().into_owned();
-	let shell_path: String = format!("'{}'", path.replace('\'', "'\"'\"'"));
+	let shell_path: String = files::shell_quote(&path);
 	let fish_path: String = path.replace('\\', "\\\\").replace('\'', "\\'");
 	BTreeMap::from([
 		(
@@ -354,6 +361,14 @@ fn check_ownership(
 	Ok(())
 }
 
+/// Fails before anything is written when a started gateway could not authenticate upstream.
+fn check_upstream_key(settings: &Settings, start: bool) -> Result<()> {
+	if start && let Mode::Gateway { .. } = settings.mode {
+		files::upstream_key(&settings.upstream_key_path())?;
+	}
+	Ok(())
+}
+
 pub struct DeployOptions {
 	pub entry: PathBuf,
 	pub start: bool,
@@ -385,6 +400,9 @@ pub fn deploy(
 		if let Some(problem) = problem {
 			eprintln!("Note: deployment would refuse this entry point: {problem}. {REMEDY}");
 		}
+		if let Err(error) = check_upstream_key(settings, options.start) {
+			eprintln!("Note: deployment would refuse to start: {error:#}");
+		}
 		return Ok(());
 	}
 	if let Some(problem) = problem {
@@ -394,6 +412,7 @@ pub fn deploy(
 		options.entry.is_file() && fs::metadata(&options.entry)?.permissions().mode() & 0o111 != 0,
 		"Entry point is not executable. {REMEDY}"
 	);
+	check_upstream_key(settings, options.start)?;
 	manager.check_available(options.start)?;
 	let clients: BTreeMap<String, String> = client_files(settings);
 	check_ownership(manager, settings, &definitions, &clients)?;
@@ -426,6 +445,239 @@ mod tests {
 			fs::read_to_string(root.path().join("example.service.previous")).unwrap(),
 			format!("{MARKER}first\n")
 		);
+	}
+
+	/// Catalog the managed-identity snapshots were rendered from.
+	const SNAPSHOT_CATALOG: &str = r#"{"data": [
+	{"id": "gpt-5.2_2025-12-11", "provisioningState": "Succeeded", "capabilities": {"chatCompletion": "true", "maxContextToken": "1234"}, "model": {"Format": "OpenAI", "Name": "gpt-5.2"}, "RateLimits": {"RequestsPerMinute": {"count": 60}, "TokensPerMinute": 100000}},
+	{"id": "Qwen/Qwen3.5-9B", "provisioningState": "Succeeded", "capabilities": {"embeddings": true}},
+	{"id": "failed", "provisioningState": "Failed"}
+]}"#;
+	const SNAPSHOT_HOME: &str = "/trapi2litellm-fixture/home";
+	const SNAPSHOT_ENTRY: &str = "/opt/trapi2litellm/bin/trapi2litellm";
+
+	/// Definitions and configuration for `values` on top of the snapshot home, keyed by file name.
+	fn rendered(values: &[(&str, &str)]) -> BTreeMap<String, String> {
+		let mut map: BTreeMap<String, String> =
+			BTreeMap::from([("HOME".into(), SNAPSHOT_HOME.into())]);
+		map.extend(
+			values
+				.iter()
+				.map(|(key, value)| ((*key).to_owned(), (*value).to_owned())),
+		);
+		let settings: Settings =
+			Settings::from_map(&map, crate::settings::Overrides::default()).unwrap();
+		let entry: &Path = Path::new(SNAPSHOT_ENTRY);
+		let host: launchd::fixture::LaunchdFixture = launchd::fixture::LaunchdFixture::default();
+		let home: &Path = Path::new(SNAPSHOT_HOME);
+		let mut files: BTreeMap<String, String> = systemd::render_units(entry, &settings).unwrap();
+		files.extend(
+			launchd::LaunchdManager::new(
+				&host,
+				&settings,
+				home.join("Library/LaunchAgents"),
+				home.join("Library/Logs/trapi2litellm"),
+				launchd::LABEL_PREFIX,
+			)
+			.unwrap()
+			.render(entry)
+			.unwrap(),
+		);
+		let catalog: Value = serde_json::from_str(SNAPSHOT_CATALOG).unwrap();
+		files.insert(
+			"config.json".into(),
+			String::from_utf8(
+				crate::sync::render(&crate::catalog::build_config(&catalog, &settings).unwrap())
+					.unwrap(),
+			)
+			.unwrap(),
+		);
+		files
+	}
+
+	#[test]
+	fn managed_identity_output_matches_the_pre_relay_snapshots() {
+		let snapshots: BTreeMap<&str, &str> = BTreeMap::from([
+			(
+				"config.json",
+				include_str!("../tests/snapshots/managed-identity/config.json"),
+			),
+			(
+				"io.github.acture.trapi2litellm.gateway.plist",
+				include_str!(
+					"../tests/snapshots/managed-identity/io.github.acture.trapi2litellm.gateway.plist"
+				),
+			),
+			(
+				"io.github.acture.trapi2litellm.sync.plist",
+				include_str!(
+					"../tests/snapshots/managed-identity/io.github.acture.trapi2litellm.sync.plist"
+				),
+			),
+			(
+				"litellm-trapi-sync.service",
+				include_str!("../tests/snapshots/managed-identity/litellm-trapi-sync.service"),
+			),
+			(
+				"litellm-trapi-sync.timer",
+				include_str!("../tests/snapshots/managed-identity/litellm-trapi-sync.timer"),
+			),
+			(
+				"litellm-trapi.service",
+				include_str!("../tests/snapshots/managed-identity/litellm-trapi.service"),
+			),
+		]);
+		for values in [
+			&[("AZURE_CLIENT_ID", "identity-selector")][..],
+			&[
+				("AZURE_CLIENT_ID", "identity-selector"),
+				("TRAPI2LITELLM_MODE", "managed_identity"),
+			],
+		] {
+			let files: BTreeMap<String, String> = rendered(values);
+			assert_eq!(
+				files.keys().map(String::as_str).collect::<Vec<&str>>(),
+				snapshots.keys().copied().collect::<Vec<&str>>()
+			);
+			for (name, snapshot) in &snapshots {
+				assert_eq!(files[*name], *snapshot, "{name} changed");
+			}
+		}
+	}
+
+	#[test]
+	fn gateway_definitions_relay_without_azure_credentials() {
+		let files: BTreeMap<String, String> = rendered(&[
+			("TRAPI2LITELLM_MODE", "gateway"),
+			("TRAPI2LITELLM_UPSTREAM_URL", "http://127.0.0.1:14000/"),
+		]);
+		for (name, content) in &files {
+			assert!(!content.contains("AZURE_"), "{name}");
+			assert!(!content.contains("upstream.env"), "{name}");
+			if name != "config.json" {
+				assert!(!content.contains("TRAPI2LITELLM_UPSTREAM_KEY"), "{name}");
+				assert!(!content.contains("TRAPI_"), "{name}");
+			}
+		}
+		assert_eq!(
+			files["litellm-trapi.service"],
+			r#"# Managed by trapi2litellm
+[Unit]
+Description=Local TRAPI LiteLLM gateway (gateway relay)
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=/trapi2litellm-fixture/home/.config/litellm-trapi/gateway.env
+Environment="LITELLM_LOCAL_MODEL_COST_MAP=True"
+Environment="NO_PROXY=127.0.0.1,localhost,169.254.169.254"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="TRAPI2LITELLM_CONFIG_DIR=/trapi2litellm-fixture/home/.config/litellm-trapi"
+Environment="TRAPI2LITELLM_MODE=gateway"
+Environment="TRAPI2LITELLM_PORT=4000"
+Environment="TRAPI2LITELLM_STATE_DIR=/trapi2litellm-fixture/home/.local/state/trapi2litellm"
+Environment="TRAPI2LITELLM_UPSTREAM_URL=http://127.0.0.1:14000"
+Environment="no_proxy=127.0.0.1,localhost,169.254.169.254"
+UnsetEnvironment=TRAPI2LITELLM_PYTHON PYTHONPATH PYTHONHOME
+Environment="CONFIG_FILE_PATH=/trapi2litellm-fixture/home/.config/litellm-trapi/config.yaml"
+Environment=LITELLM_MODE=PRODUCTION
+Environment=LITELLM_LOG=WARNING
+ExecStart="/opt/trapi2litellm/bin/trapi2litellm" serve --port 4000
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=930
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
+"#
+		);
+		for name in [
+			"litellm-trapi-sync.service",
+			"io.github.acture.trapi2litellm.gateway.plist",
+			"io.github.acture.trapi2litellm.sync.plist",
+		] {
+			assert!(
+				files[name].contains("TRAPI2LITELLM_MODE")
+					&& files[name].contains("http://127.0.0.1:14000"),
+				"{name}"
+			);
+		}
+		let plist: &str = &files["io.github.acture.trapi2litellm.gateway.plist"];
+		assert!(plist.contains("<key>TRAPI2LITELLM_MODE</key>\n\t\t<string>gateway</string>\n"));
+		assert!(plist.contains(
+			"<key>TRAPI2LITELLM_UPSTREAM_URL</key>\n\t\t<string>http://127.0.0.1:14000</string>\n"
+		));
+		assert!(
+			files["config.json"].contains("\"api_key\": \"os.environ/TRAPI2LITELLM_UPSTREAM_KEY\"")
+		);
+		// Another loopback forward joins the proxy exclusions, so the upstream key bypasses any
+		// HTTP proxy the job environment names.
+		for (url, no_proxy) in [
+			(
+				"http://[::1]:14000",
+				"127.0.0.1,localhost,169.254.169.254,::1",
+			),
+			(
+				"http://127.0.0.2:14000",
+				"127.0.0.1,localhost,169.254.169.254,127.0.0.2",
+			),
+			(
+				"http://localhost:14000",
+				"127.0.0.1,localhost,169.254.169.254",
+			),
+		] {
+			let files: BTreeMap<String, String> = rendered(&[
+				("TRAPI2LITELLM_MODE", "gateway"),
+				("TRAPI2LITELLM_UPSTREAM_URL", url),
+			]);
+			for name in ["litellm-trapi.service", "litellm-trapi-sync.service"] {
+				for key in ["NO_PROXY", "no_proxy"] {
+					assert!(
+						files[name].contains(&format!("Environment=\"{key}={no_proxy}\"\n")),
+						"{url} {name} {key}"
+					);
+				}
+			}
+			for name in [
+				"io.github.acture.trapi2litellm.gateway.plist",
+				"io.github.acture.trapi2litellm.sync.plist",
+			] {
+				for key in ["NO_PROXY", "no_proxy"] {
+					assert!(
+						files[name].contains(&format!(
+							"<key>{key}</key>\n\t\t<string>{no_proxy}</string>\n"
+						)),
+						"{url} {name} {key}"
+					);
+				}
+			}
+		}
+	}
+
+	#[test]
+	fn started_gateway_mode_requires_the_upstream_key_before_writing() {
+		let root: tempfile::TempDir = tempfile::tempdir().unwrap();
+		check_upstream_key(&crate::settings::test_settings(root.path()), true).unwrap();
+		let settings: Settings = crate::settings::test_gateway_settings(root.path());
+		check_upstream_key(&settings, false).unwrap();
+		assert!(
+			format!("{:#}", check_upstream_key(&settings, true).unwrap_err())
+				.contains("requires the upstream key file")
+		);
+		assert!(!settings.config_dir.exists());
+		fs::create_dir_all(&settings.config_dir).unwrap();
+		let path: PathBuf = settings.upstream_key_path();
+		fs::write(&path, "TRAPI2LITELLM_UPSTREAM_KEY=sk-upstream\n").unwrap();
+		fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+		assert!(check_upstream_key(&settings, true).is_err());
+		fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+		check_upstream_key(&settings, true).unwrap();
 	}
 
 	#[test]

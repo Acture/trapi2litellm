@@ -1,10 +1,10 @@
 use super::{
-	Enablement, GATEWAY_ENVIRONMENT, Job, Linger, MARKER, ServiceManager, UnitState,
+	Enablement, Job, Linger, MARKER, ServiceManager, UnitState, gateway_environment,
 	job_environment,
 };
 use crate::{
 	process,
-	settings::{SERVICE, Settings},
+	settings::{Mode, SERVICE, Settings},
 	sync,
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -197,12 +197,17 @@ pub(super) fn render_units(entry: &Path, settings: &Settings) -> Result<BTreeMap
 		"CONFIG_FILE_PATH={}",
 		settings.config_path().display()
 	))?;
-	let gateway_only: String = GATEWAY_ENVIRONMENT
+	let gateway_only: String = gateway_environment(settings)
+		.into_iter()
 		.map(|(key, value)| format!("Environment={key}={value}\n"))
-		.concat();
+		.collect();
 	let port: u16 = settings.port;
+	let authentication: &str = match settings.mode {
+		Mode::ManagedIdentity => "Managed Identity",
+		Mode::Gateway { .. } => "gateway relay",
+	};
 	let gateway: String = format!(
-		"{MARKER}[Unit]\nDescription=Local TRAPI LiteLLM gateway (Managed Identity)\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n[Service]\nType=simple\nEnvironmentFile={key_file}\n{shared}Environment={config}\n{gateway_only}ExecStart={command} serve --port {port}\nExecReload=/bin/kill -HUP $MAINPID\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=930\nKillMode=mixed\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\n\n[Install]\nWantedBy=default.target\n"
+		"{MARKER}[Unit]\nDescription=Local TRAPI LiteLLM gateway ({authentication})\nStartLimitIntervalSec=300\nStartLimitBurst=5\n\n[Service]\nType=simple\nEnvironmentFile={key_file}\n{shared}Environment={config}\n{gateway_only}ExecStart={command} serve --port {port}\nExecReload=/bin/kill -HUP $MAINPID\nRestart=on-failure\nRestartSec=5\nTimeoutStopSec=930\nKillMode=mixed\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\n\n[Install]\nWantedBy=default.target\n"
 	);
 	let sync: String = format!(
 		"{MARKER}[Unit]\nDescription=Discover TRAPI models and update the local LiteLLM gateway\n\n[Service]\nType=oneshot\n{shared}ExecStart={command} sync\nTimeoutStartSec=240\nUMask=0077\nNoNewPrivileges=true\nPrivateTmp=true\n"

@@ -1,0 +1,39 @@
+# Managed by trapi2litellm
+[Unit]
+Description=Local TRAPI LiteLLM gateway (Managed Identity)
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=/trapi2litellm-fixture/home/.config/litellm-trapi/gateway.env
+Environment="AZURE_CLIENT_ID=identity-selector"
+Environment="LITELLM_LOCAL_MODEL_COST_MAP=True"
+Environment="NO_PROXY=127.0.0.1,localhost,169.254.169.254"
+Environment="PYTHONDONTWRITEBYTECODE=1"
+Environment="TRAPI2LITELLM_CONFIG_DIR=/trapi2litellm-fixture/home/.config/litellm-trapi"
+Environment="TRAPI2LITELLM_PORT=4000"
+Environment="TRAPI2LITELLM_STATE_DIR=/trapi2litellm-fixture/home/.local/state/trapi2litellm"
+Environment="TRAPI_API_VERSION=2025-04-01-preview"
+Environment="TRAPI_BASE_URL=https://trapi.research.microsoft.com/redmond/interactive"
+Environment="TRAPI_CATALOG_VERSION=preview"
+Environment="TRAPI_SCOPE=api://trapi/.default"
+Environment="no_proxy=127.0.0.1,localhost,169.254.169.254"
+UnsetEnvironment=TRAPI2LITELLM_PYTHON PYTHONPATH PYTHONHOME
+Environment="CONFIG_FILE_PATH=/trapi2litellm-fixture/home/.config/litellm-trapi/config.yaml"
+Environment=LITELLM_MODE=PRODUCTION
+Environment=LITELLM_LOG=WARNING
+Environment=AZURE_TOKEN_CREDENTIALS=ManagedIdentityCredential
+Environment=AZURE_CREDENTIAL=DefaultAzureCredential
+ExecStart="/opt/trapi2litellm/bin/trapi2litellm" serve --port 4000
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=930
+KillMode=mixed
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

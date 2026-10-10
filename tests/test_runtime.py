@@ -43,6 +43,28 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(result, {"previous_models": ["trapi/old"]})
 
+    def test_relay_config_validates_without_azure_parameters(self) -> None:
+        relay: dict[str, object] = {
+            "model_list": [
+                {
+                    "model_name": "trapi/gpt-5.2",
+                    "litellm_params": {
+                        "model": "litellm_proxy/trapi/gpt-5.2",
+                        "api_base": "http://127.0.0.1:14000/v1",
+                        "api_key": "os.environ/TRAPI2LITELLM_UPSTREAM_KEY",
+                    },
+                    "model_info": {"id": "digest", "mode": "chat", "base_model": "azure/gpt-5.2"},
+                }
+            ]
+        }
+        # Synchronization validates without the upstream key in its environment.
+        with patch.dict(os.environ):
+            os.environ.pop("TRAPI2LITELLM_UPSTREAM_KEY", None)
+            self.assertEqual(
+                runtime.validate({"config": relay, "previous_text": "model_list: []\n"}),
+                {"previous_models": []},
+            )
+
     def test_schema_rejects_missing_provider_model(self) -> None:
         with self.assertRaises((ValueError, TypeError)):
             runtime.validate({"config": {"model_list": [{"model_name": "trapi/bad"}]}})
@@ -224,6 +246,16 @@ class RuntimeTests(unittest.TestCase):
             config: Path = root / "config"
             config.mkdir()
             (config / "config.yaml").write_text("default configuration\n")
+            # macOS serves only as a relay, which requires the upstream key file.
+            relay: dict[str, str] = {}
+            if sys.platform == "darwin":
+                upstream = config / "upstream.env"
+                upstream.write_text("TRAPI2LITELLM_UPSTREAM_KEY=sk-upstream-fixture\n")
+                upstream.chmod(0o600)
+                relay = {
+                    "TRAPI2LITELLM_MODE": "gateway",
+                    "TRAPI2LITELLM_UPSTREAM_URL": "http://127.0.0.1:14000",
+                }
             (root / "custom.yaml").write_text("explicit configuration\n")
             absolute: str = f"{root}/../{root.name}/custom.yaml"
             for override, expected_path, content in (
@@ -240,6 +272,7 @@ class RuntimeTests(unittest.TestCase):
                     "TRAPI_BASE_URL": "https://example.invalid/pool",
                     "LITELLM_MASTER_KEY": "sk-exec-regression",
                     "PYTHONPATH": str(root),
+                    **relay,
                 }
                 if override is not None:
                     env["CONFIG_FILE_PATH"] = override

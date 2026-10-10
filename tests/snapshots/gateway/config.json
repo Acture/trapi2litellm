@@ -1,0 +1,165 @@
+{
+  "model_list": [
+    {
+      "model_name": "trapi/Qwen/Qwen3.5-9B",
+      "litellm_params": {
+        "model": "litellm_proxy/trapi/Qwen/Qwen3.5-9B",
+        "api_base": "http://127.0.0.1:14000/v1",
+        "api_key": "os.environ/TRAPI2LITELLM_UPSTREAM_KEY"
+      },
+      "model_info": {
+        "availability_evidence": "catalog_only_not_an_inference_health_check",
+        "capabilities": {
+          "chatCompletion": "true"
+        },
+        "id": "b6d8f80689c9a86db069a2638120dddaa317daa296eb141aa8c8a3c7d372b933",
+        "mode": "chat",
+        "provisioning_state": "Succeeded",
+        "rate_limits": null,
+        "source": "trapi",
+        "upstream_deployment": "Qwen/Qwen3.5-9B",
+        "upstream_model": null
+      }
+    },
+    {
+      "model_name": "trapi/gpt-4o-mini_2024-07-18",
+      "litellm_params": {
+        "model": "litellm_proxy/trapi/gpt-4o-mini_2024-07-18",
+        "api_base": "http://127.0.0.1:14000/v1",
+        "api_key": "os.environ/TRAPI2LITELLM_UPSTREAM_KEY"
+      },
+      "model_info": {
+        "availability_evidence": "catalog_only_not_an_inference_health_check",
+        "base_model": "azure/gpt-4o-mini",
+        "capabilities": {
+          "chatCompletion": "true"
+        },
+        "id": "3c30773d6b6e12983ec57fce027d941387797b066d73879f6744d150996835da",
+        "mode": "chat",
+        "provisioning_state": "Succeeded",
+        "rate_limits": null,
+        "source": "trapi",
+        "upstream_deployment": "gpt-4o-mini_2024-07-18",
+        "upstream_model": {
+          "Format": "OpenAI",
+          "Name": "gpt-4o-mini"
+        }
+      }
+    },
+    {
+      "model_name": "trapi/gpt-5-codex_2025-09-15",
+      "litellm_params": {
+        "model": "litellm_proxy/trapi/gpt-5-codex_2025-09-15",
+        "api_base": "http://127.0.0.1:14000/v1",
+        "api_key": "os.environ/TRAPI2LITELLM_UPSTREAM_KEY"
+      },
+      "model_info": {
+        "availability_evidence": "catalog_only_not_an_inference_health_check",
+        "base_model": "azure/gpt-5-codex",
+        "capabilities": {
+          "responses": "true"
+        },
+        "id": "8e0680bd1feb628c0b5b338062add9eec878f54507ec1986b436cc8db7a3bac9",
+        "mode": "responses",
+        "provisioning_state": "Succeeded",
+        "rate_limits": null,
+        "source": "trapi",
+        "upstream_deployment": "gpt-5-codex_2025-09-15",
+        "upstream_model": {
+          "Format": "OpenAI",
+          "Name": "gpt-5-codex"
+        }
+      }
+    },
+    {
+      "model_name": "trapi/gpt-5.2_2025-12-11",
+      "litellm_params": {
+        "model": "litellm_proxy/trapi/gpt-5.2_2025-12-11",
+        "api_base": "http://127.0.0.1:14000/v1",
+        "api_key": "os.environ/TRAPI2LITELLM_UPSTREAM_KEY"
+      },
+      "model_info": {
+        "availability_evidence": "catalog_only_not_an_inference_health_check",
+        "base_model": "azure/gpt-5.2",
+        "capabilities": {
+          "chatCompletion": "true"
+        },
+        "id": "8acf4d78059c7dda04450defd8d12161c596b142000ac3c5be9eb873944cc566",
+        "mode": "chat",
+        "provisioning_state": "Succeeded",
+        "rate_limits": null,
+        "source": "trapi",
+        "upstream_deployment": "gpt-5.2_2025-12-11",
+        "upstream_model": {
+          "Format": "OpenAI",
+          "Name": "gpt-5.2"
+        }
+      }
+    },
+    {
+      "model_name": "trapi/o3-mini_2025-01-31",
+      "litellm_params": {
+        "model": "litellm_proxy/trapi/o3-mini_2025-01-31",
+        "api_base": "http://127.0.0.1:14000/v1",
+        "api_key": "os.environ/TRAPI2LITELLM_UPSTREAM_KEY"
+      },
+      "model_info": {
+        "availability_evidence": "catalog_only_not_an_inference_health_check",
+        "base_model": "azure/o3-mini",
+        "capabilities": {
+          "chatCompletion": "true"
+        },
+        "id": "449cdad951731616701e5842baace97b6ca6d54e2af58d4a4f0fa4a30129036f",
+        "mode": "chat",
+        "provisioning_state": "Succeeded",
+        "rate_limits": null,
+        "source": "trapi",
+        "upstream_deployment": "o3-mini_2025-01-31",
+        "upstream_model": {
+          "Format": "OpenAI",
+          "Name": "o3-mini"
+        }
+      }
+    },
+    {
+      "model_name": "trapi/text-embedding-3-large_1",
+      "litellm_params": {
+        "model": "litellm_proxy/trapi/text-embedding-3-large_1",
+        "api_base": "http://127.0.0.1:14000/v1",
+        "api_key": "os.environ/TRAPI2LITELLM_UPSTREAM_KEY"
+      },
+      "model_info": {
+        "availability_evidence": "catalog_only_not_an_inference_health_check",
+        "base_model": "azure/text-embedding-3-large",
+        "capabilities": {
+          "embeddings": "true"
+        },
+        "id": "a100466e430ac8a68ad9473ae7a04fe3f652989b3e22c32ac3ddd22786845a6e",
+        "mode": "embedding",
+        "provisioning_state": "Succeeded",
+        "rate_limits": null,
+        "source": "trapi",
+        "upstream_deployment": "text-embedding-3-large_1",
+        "upstream_model": {
+          "Format": "OpenAI",
+          "Name": "text-embedding-3-large"
+        }
+      }
+    }
+  ],
+  "litellm_settings": {
+    "drop_params": false,
+    "set_verbose": false,
+    "telemetry": false,
+    "turn_off_message_logging": true
+  },
+  "router_settings": {
+    "fallbacks": [],
+    "num_retries": 0,
+    "timeout": 600
+  },
+  "general_settings": {
+    "disable_spend_logs": true,
+    "master_key": "os.environ/LITELLM_MASTER_KEY"
+  }
+}

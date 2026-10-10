@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Managed by trapi2litellm -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>AZURE_CLIENT_ID</key>
+		<string>identity-selector</string>
+		<key>LITELLM_LOCAL_MODEL_COST_MAP</key>
+		<string>True</string>
+		<key>NO_PROXY</key>
+		<string>127.0.0.1,localhost,169.254.169.254</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>PYTHONDONTWRITEBYTECODE</key>
+		<string>1</string>
+		<key>PYTHONHOME</key>
+		<string></string>
+		<key>PYTHONPATH</key>
+		<string></string>
+		<key>TRAPI2LITELLM_CONFIG_DIR</key>
+		<string>/trapi2litellm-fixture/home/.config/litellm-trapi</string>
+		<key>TRAPI2LITELLM_PORT</key>
+		<string>4000</string>
+		<key>TRAPI2LITELLM_PYTHON</key>
+		<string></string>
+		<key>TRAPI2LITELLM_STATE_DIR</key>
+		<string>/trapi2litellm-fixture/home/.local/state/trapi2litellm</string>
+		<key>TRAPI_API_VERSION</key>
+		<string>2025-04-01-preview</string>
+		<key>TRAPI_BASE_URL</key>
+		<string>https://trapi.research.microsoft.com/redmond/interactive</string>
+		<key>TRAPI_CATALOG_VERSION</key>
+		<string>preview</string>
+		<key>TRAPI_SCOPE</key>
+		<string>api://trapi/.default</string>
+		<key>no_proxy</key>
+		<string>127.0.0.1,localhost,169.254.169.254</string>
+	</dict>
+	<key>Label</key>
+	<string>io.github.acture.trapi2litellm.sync</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/trapi2litellm/bin/trapi2litellm</string>
+		<string>sync</string>
+	</array>
+	<key>RunAtLoad</key>
+	<false/>
+	<key>StandardErrorPath</key>
+	<string>/trapi2litellm-fixture/home/Library/Logs/trapi2litellm/sync.log</string>
+	<key>StandardOutPath</key>
+	<string>/trapi2litellm-fixture/home/Library/Logs/trapi2litellm/sync.log</string>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Minute</key>
+		<integer>7</integer>
+	</dict>
+	<key>Umask</key>
+	<integer>63</integer>
+</dict>
+</plist>
