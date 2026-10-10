@@ -43,6 +43,28 @@ class RuntimeTests(unittest.TestCase):
         )
         self.assertEqual(result, {"previous_models": ["trapi/old"]})
 
+    def test_relay_config_validates_without_azure_parameters(self) -> None:
+        relay: dict[str, object] = {
+            "model_list": [
+                {
+                    "model_name": "trapi/gpt-5.2",
+                    "litellm_params": {
+                        "model": "litellm_proxy/trapi/gpt-5.2",
+                        "api_base": "http://127.0.0.1:14000/v1",
+                        "api_key": "os.environ/TRAPI2LITELLM_UPSTREAM_KEY",
+                    },
+                    "model_info": {"id": "digest", "mode": "chat", "base_model": "azure/gpt-5.2"},
+                }
+            ]
+        }
+        # Synchronization validates without the upstream key in its environment.
+        with patch.dict(os.environ):
+            os.environ.pop("TRAPI2LITELLM_UPSTREAM_KEY", None)
+            self.assertEqual(
+                runtime.validate({"config": relay, "previous_text": "model_list: []\n"}),
+                {"previous_models": []},
+            )
+
     def test_schema_rejects_missing_provider_model(self) -> None:
         with self.assertRaises((ValueError, TypeError)):
             runtime.validate({"config": {"model_list": [{"model_name": "trapi/bad"}]}})
@@ -224,6 +246,16 @@ class RuntimeTests(unittest.TestCase):
             config: Path = root / "config"
             config.mkdir()
             (config / "config.yaml").write_text("default configuration\n")
+            # macOS serves only as a relay, which requires the upstream key file.
+            relay: dict[str, str] = {}
+            if sys.platform == "darwin":
+                upstream = config / "upstream.env"
+                upstream.write_text("TRAPI2LITELLM_UPSTREAM_KEY=sk-upstream-fixture\n")
+                upstream.chmod(0o600)
+                relay = {
+                    "TRAPI2LITELLM_MODE": "gateway",
+                    "TRAPI2LITELLM_UPSTREAM_URL": "http://127.0.0.1:14000",
+                }
             (root / "custom.yaml").write_text("explicit configuration\n")
             absolute: str = f"{root}/../{root.name}/custom.yaml"
             for override, expected_path, content in (
@@ -240,6 +272,7 @@ class RuntimeTests(unittest.TestCase):
                     "TRAPI_BASE_URL": "https://example.invalid/pool",
                     "LITELLM_MASTER_KEY": "sk-exec-regression",
                     "PYTHONPATH": str(root),
+                    **relay,
                 }
                 if override is not None:
                     env["CONFIG_FILE_PATH"] = override
@@ -300,9 +333,27 @@ class RuntimeTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
             )
-            self.assertIn("serve --port 4567", result.stdout)
+            expected = (
+                "<string>serve</string>\n\t\t<string>--port</string>\n\t\t<string>4567</string>"
+                if sys.platform == "darwin"
+                else "serve --port 4567"
+            )
+            self.assertIn(expected, result.stdout)
             self.assertFalse((root / "config").exists())
             self.assertFalse((root / "state").exists())
+
+    def test_smoke_test_reads_top_level_launchd_pid(self) -> None:
+        with patch.dict(
+            os.environ, {"TRAPI2LITELLM_PORT": "4567", "TRAPI2LITELLM_STATE_DIR": "/nonexistent"}
+        ):
+            from trapi2litellm import smoke_test
+        running = (
+            "gui/501/io.github.acture.trapi2litellm.gateway = {\n\tstate = running\n"
+            '\tendpoints = {\n\t\t"x" = {\n\t\t\tpid = 1\n\t\t}\n\t}\n\tpid = 4242\n}\n'
+        )
+        self.assertEqual(smoke_test.launchd_pid(running), "4242")
+        with self.assertRaises(RuntimeError):
+            smoke_test.launchd_pid("gui/501/x = {\n\tstate = not running\n}\n")
 
 
 if __name__ == "__main__":

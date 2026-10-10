@@ -2,21 +2,27 @@ mod catalog;
 mod deploy;
 mod files;
 mod process;
+mod relay;
 mod runtime;
 mod settings;
 mod sync;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
+use deploy::{
+	Job,
+	launchd::{self, LaunchdManager, LaunchdService, SystemLaunchHost},
+	systemd::{SystemHost, SystemdManager},
+};
 use runtime::{PythonRuntime, Runtime, RuntimeError};
 use serde_json::{Value, json};
-use settings::{Overrides, Settings};
-use std::{path::PathBuf, process::ExitCode};
+use settings::{Mode, Overrides, Settings};
+use std::{env, path::PathBuf, process::ExitCode};
 
 #[derive(Parser)]
 #[command(
 	version,
-	about = "Managed-identity TRAPI discovery and a loopback LiteLLM gateway"
+	about = "TRAPI discovery (Managed Identity or gateway relay) and a loopback LiteLLM gateway"
 )]
 struct Cli {
 	#[command(subcommand)]
@@ -24,7 +30,8 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
-	/// Install user units; --start explicitly enables and starts services
+	/// Install user services (systemd units or launchd agents); --start explicitly enables and
+	/// starts them
 	Deploy {
 		#[arg(long)]
 		config_dir: Option<PathBuf>,
@@ -57,11 +64,15 @@ enum Commands {
 	SmokeTest,
 }
 
-// Discovery is lazy: install-only and dry-run never inspect or invoke Python.
+// Discovery is lazy: install-only and dry-run never inspect or invoke Python, and gateway mode
+// fetches the relayed catalog natively.
 struct LazyRuntime;
 impl Runtime for LazyRuntime {
 	fn catalog(&self, settings: &Settings) -> Result<Value> {
-		PythonRuntime::discover()?.catalog(settings)
+		match settings.mode {
+			Mode::ManagedIdentity => PythonRuntime::discover()?.catalog(settings),
+			Mode::Gateway { .. } => relay::catalog(settings),
+		}
 	}
 	fn validate(
 		&self,
@@ -69,6 +80,80 @@ impl Runtime for LazyRuntime {
 		previous_text: Option<&str>,
 	) -> Result<Vec<String>> {
 		PythonRuntime::discover()?.validate(config, previous_text)
+	}
+}
+
+/// The per-user launchd domain: LaunchAgents and logs under the user's Library.
+fn launchd_manager(settings: &Settings) -> Result<LaunchdManager<'_, SystemLaunchHost>> {
+	let home: PathBuf = env::var_os("HOME").context("HOME is required")?.into();
+	// A relative HOME would name a LaunchAgents directory below the working directory, which
+	// launchd never scans at login.
+	ensure!(home.is_absolute(), "HOME must be an absolute path");
+	LaunchdManager::new(
+		&SystemLaunchHost,
+		settings,
+		home.join("Library/LaunchAgents"),
+		home.join("Library/Logs/trapi2litellm"),
+		launchd::LABEL_PREFIX,
+	)
+}
+
+/// Fails when this platform cannot run the configured mode: macOS has no Azure Managed Identity.
+fn check_platform(settings: &Settings) -> Result<()> {
+	ensure!(
+		!(cfg!(target_os = "macos") && settings.mode == Mode::ManagedIdentity),
+		"macOS has no Azure Managed Identity endpoint; set TRAPI2LITELLM_MODE=gateway and TRAPI2LITELLM_UPSTREAM_URL"
+	);
+	Ok(())
+}
+
+fn deploy(settings: &Settings, options: &deploy::DeployOptions) -> Result<()> {
+	if let Err(refusal) = check_platform(settings) {
+		if !options.dry_run {
+			return Err(refusal);
+		}
+		eprintln!("Note: deployment would refuse this mode: {refusal}");
+	}
+	if cfg!(target_os = "linux") {
+		deploy::deploy(
+			&LazyRuntime,
+			&sync::SystemService { settings },
+			&SystemdManager::new(&SystemHost, settings),
+			settings,
+			options,
+		)
+	} else if cfg!(target_os = "macos") {
+		let manager: LaunchdManager<'_, SystemLaunchHost> = launchd_manager(settings)?;
+		deploy::deploy(
+			&LazyRuntime,
+			&LaunchdService { manager: &manager },
+			&manager,
+			settings,
+			options,
+		)
+	} else {
+		bail!("Deployment supports Linux with systemd --user and macOS with launchd only")
+	}
+}
+
+fn synchronize(settings: &Settings, bootstrap: bool, no_reload: bool) -> Result<sync::SyncResult> {
+	if cfg!(target_os = "macos") {
+		let manager: LaunchdManager<'_, SystemLaunchHost> = launchd_manager(settings)?;
+		sync::synchronize(
+			&LazyRuntime,
+			&LaunchdService { manager: &manager },
+			settings,
+			bootstrap,
+			no_reload,
+		)
+	} else {
+		sync::synchronize(
+			&LazyRuntime,
+			&sync::SystemService { settings },
+			settings,
+			bootstrap,
+			no_reload,
+		)
 	}
 }
 
@@ -94,41 +179,41 @@ fn run(cli: Cli) -> Result<()> {
 				enable_linger,
 				dry_run,
 			};
-			deploy::deploy(
-				&LazyRuntime,
-				&sync::SystemService {
-					settings: &settings,
-				},
-				&deploy::SystemHost,
-				&settings,
-				&options,
-			)
+			deploy(&settings, &options)
 		}
 		Commands::Serve { port } => {
 			let settings: Settings = Settings::from_env(Overrides {
 				port,
 				..Overrides::default()
 			})?;
-			PythonRuntime::discover()?.exec("serve", &settings)
+			check_platform(&settings)?;
+			PythonRuntime::discover()?.exec("serve", &settings, &[])
 		}
 		Commands::SmokeTest => {
 			let settings: Settings = Settings::from_env(Overrides::default())?;
-			PythonRuntime::discover()?.exec("smoke-test", &settings)
+			let python: PythonRuntime = PythonRuntime::discover()?;
+			if cfg!(target_os = "macos") {
+				let manager: LaunchdManager<'_, SystemLaunchHost> = launchd_manager(&settings)?;
+				python.exec(
+					"smoke-test",
+					&settings,
+					&[
+						("TRAPI2LITELLM_SERVICE_MANAGER", "launchd"),
+						("TRAPI2LITELLM_SERVICE_LABEL", manager.label(Job::Gateway)),
+					],
+				)
+			} else {
+				python.exec("smoke-test", &settings, &[])
+			}
 		}
 		Commands::Sync {
 			bootstrap,
 			no_reload,
 		} => {
 			let settings: Settings = Settings::from_env(Overrides::default())?;
-			let result: Result<sync::SyncResult> = sync::synchronize(
-				&LazyRuntime,
-				&sync::SystemService {
-					settings: &settings,
-				},
-				&settings,
-				bootstrap,
-				no_reload,
-			);
+			// Refuse before the lock or any state, including sync-error.json, is written.
+			check_platform(&settings)?;
+			let result: Result<sync::SyncResult> = synchronize(&settings, bootstrap, no_reload);
 			match result {
 				Ok(result) => {
 					println!("{}", serde_json::to_string(&result)?);
@@ -142,7 +227,8 @@ fn run(cli: Cli) -> Result<()> {
 							result["http_status"] = json!(status);
 						}
 					} else {
-						result["message"] = json!(error.to_string());
+						// The cause tells a refused SSH forward from an unreachable upstream.
+						result["message"] = json!(format!("{error:#}"));
 					}
 					if settings.state_dir.exists() {
 						files::atomic_write(
@@ -163,7 +249,7 @@ fn main() -> ExitCode {
 	match run(cli) {
 		Ok(()) => ExitCode::SUCCESS,
 		Err(error) => {
-			eprintln!("{error}");
+			eprintln!("{error:#}");
 			ExitCode::FAILURE
 		}
 	}

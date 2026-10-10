@@ -47,8 +47,25 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.root: Path = Path(self.folder.name)
         self.config: Path = self.root / "config.yaml"
         self.config.write_text("model_list: []\n")
+        # The environment the proxy last loaded its configuration with; see load().
+        self.proxy_environment: dict[str, str] = {}
+        self.module: dict[str, object] = self.load({})
+        self.gate = cast(Callable[[ASGIApp], ASGIApp], self.module["MasterKeyGate"])
+
+    def load(self, environment: dict[str, str]) -> dict[str, object]:
+        """Import the gateway against a stub proxy, without inherited mode settings.
+
+        Records the environment the proxy loads its configuration with in `proxy_environment`.
+        """
         proxy = ModuleType("litellm.proxy.proxy_server")
-        setattr(proxy, "app", Starlette())
+
+        def proxy_attribute(name: str) -> object:
+            if name != "app":
+                raise AttributeError(name)
+            self.proxy_environment = dict(os.environ)
+            return Starlette()
+
+        setattr(proxy, "__getattr__", proxy_attribute)
         with (
             patch.dict(sys.modules, {"litellm.proxy.proxy_server": proxy}),
             patch.dict(
@@ -56,14 +73,29 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "CONFIG_FILE_PATH": str(self.config),
                     "TRAPI2LITELLM_STATE_DIR": str(self.root),
+                    "TRAPI2LITELLM_CONFIG_DIR": str(self.root),
                     "LITELLM_MASTER_KEY": KEY.decode(),
                 },
             ),
         ):
-            self.module: dict[str, object] = runpy.run_path(
-                str(Path(trapi2litellm.__file__).parent / "gateway_app.py")
-            )
-        self.gate = cast(Callable[[ASGIApp], ASGIApp], self.module["MasterKeyGate"])
+            for name in (
+                "TRAPI2LITELLM_MODE",
+                "TRAPI2LITELLM_UPSTREAM_URL",
+                "TRAPI2LITELLM_UPSTREAM_KEY",
+            ):
+                os.environ.pop(name, None)
+            os.environ.update(environment)
+            return runpy.run_path(str(Path(trapi2litellm.__file__).parent / "gateway_app.py"))
+
+    def write_upstream_key(self, content: str, mode: int = 0o600) -> None:
+        path = self.root / "upstream.env"
+        path.write_text(content)
+        path.chmod(mode)
+
+    async def status_body(self, module: dict[str, object]) -> dict[str, object]:
+        status = cast(Callable[[Request], Awaitable[JSONResponse]], module["status"])
+        response = await status(Request(scope(KEY)))
+        return json.loads(bytes(response.body))
 
     async def test_dashboard_shell_is_public_but_all_data_requires_key(self) -> None:
         app = cast(ASGIApp, self.module["app"])
@@ -142,13 +174,61 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         (self.root / "deployment-status.json").write_text(
             json.dumps({"status": "rolled_back", "phase": "activation"})
         )
-        status = cast(Callable[[Request], Awaitable[JSONResponse]], self.module["status"])
-        response = await status(Request(scope(KEY)))
-        body: dict[str, object] = json.loads(bytes(response.body))
+        body = await self.status_body(self.module)
         self.assertEqual(body["sync-status"], {"status": "ok"})
         self.assertEqual(
             body["deployment-status"], {"status": "rolled_back", "phase": "activation"}
         )
+
+    async def test_status_reports_the_operating_mode(self) -> None:
+        body = await self.status_body(self.module)
+        self.assertEqual(body["authentication"], "managed_identity")
+        self.assertNotIn("upstream_url", body)
+        self.assertNotIn("TRAPI2LITELLM_UPSTREAM_KEY", self.proxy_environment)
+        upstream_key = "sk-upstream-secret"
+        self.write_upstream_key(f"# relay\nTRAPI2LITELLM_UPSTREAM_KEY={upstream_key}\n")
+        relay = self.load(
+            {
+                "TRAPI2LITELLM_MODE": "gateway",
+                "TRAPI2LITELLM_UPSTREAM_URL": "http://127.0.0.1:14000",
+            }
+        )
+        body = await self.status_body(relay)
+        self.assertEqual(body["authentication"], "gateway")
+        self.assertEqual(body["upstream_url"], "http://127.0.0.1:14000")
+        self.assertNotIn(upstream_key, json.dumps(body))
+        with self.assertRaises(KeyError):
+            self.load({"TRAPI2LITELLM_MODE": "gateway"})
+
+    def test_each_worker_reads_the_upstream_key_before_the_proxy_loads(self) -> None:
+        relay = {
+            "TRAPI2LITELLM_MODE": "gateway",
+            "TRAPI2LITELLM_UPSTREAM_URL": "http://127.0.0.1:14000",
+        }
+        # A reload starts new workers, which pick up a rotated key.
+        for key in ("sk-first", "sk-rotated"):
+            self.write_upstream_key(f"TRAPI2LITELLM_UPSTREAM_KEY={key}\r\n")
+            self.load({**relay, "TRAPI2LITELLM_UPSTREAM_KEY": "sk-inherited"})
+            self.assertEqual(self.proxy_environment["TRAPI2LITELLM_UPSTREAM_KEY"], key)
+        for content, mode in [
+            ("TRAPI2LITELLM_UPSTREAM_KEY=sk-secret\n", 0o644),
+            ("TRAPI2LITELLM_UPSTREAM_KEY=sk-secret\n", 0o640),
+            ("OTHER=sk-secret\nTRAPI2LITELLM_UPSTREAM_KEY=\n", 0o600),
+            ('TRAPI2LITELLM_UPSTREAM_KEY="sk-secret"\n', 0o600),
+            ("TRAPI2LITELLM_UPSTREAM_KEY=sk-secret \n", 0o600),
+            ("TRAPI2LITELLM_UPSTREAM_KEY=sk-secret\r", 0o600),
+        ]:
+            self.write_upstream_key(content, mode)
+            with self.assertRaises(RuntimeError) as raised:
+                self.load(relay)
+            self.assertNotIn("sk-secret", str(raised.exception), content)
+        (self.root / "upstream.env").unlink()
+        os.mkfifo(self.root / "upstream.env", 0o600)
+        with self.assertRaisesRegex(RuntimeError, "must be a regular file"):
+            self.load(relay)
+        (self.root / "upstream.env").unlink()
+        with self.assertRaises(FileNotFoundError):
+            self.load(relay)
 
 
 if __name__ == "__main__":

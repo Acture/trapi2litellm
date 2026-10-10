@@ -8,6 +8,7 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -23,6 +24,9 @@ def prepare(config: Path, state: Path) -> None:
     state.mkdir(parents=True, exist_ok=True, mode=0o700)
     (config / "gateway.env").write_text(f"LITELLM_MASTER_KEY={KEY}\n")
     (config / "gateway.env").chmod(0o600)
+    # macOS serves only as a relay; nothing here contacts the upstream.
+    (config / "upstream.env").write_text("TRAPI2LITELLM_UPSTREAM_KEY=sk-offline-upstream\n")
+    (config / "upstream.env").chmod(0o600)
     # A synthetic catalog-only model. No test calls an inference endpoint.
     (config / "config.yaml").write_text(
         json.dumps(
@@ -190,6 +194,9 @@ def check(command: list[str], work: Path, config_path: str = "default") -> None:
         "PYTHONPATH": str(work),
         **override,
     }
+    if sys.platform == "darwin":
+        env["TRAPI2LITELLM_MODE"] = "gateway"
+        env["TRAPI2LITELLM_UPSTREAM_URL"] = "http://127.0.0.1:9"
     with (work / "gateway.log").open("wb") as log:
         process = subprocess.Popen(
             [*command, "serve", "--port", str(port)], cwd=work, env=env, stdout=log, stderr=log

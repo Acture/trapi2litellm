@@ -1,9 +1,16 @@
-use crate::{catalog::Config, files, process, settings::Settings};
+use crate::{
+	catalog::Config,
+	files, process,
+	settings::{Mode, Settings},
+};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-	env, fmt,
+	collections::BTreeMap,
+	env,
+	ffi::{OsStr, OsString},
+	fmt,
 	os::unix::process::CommandExt,
 	path::{Path, PathBuf},
 	process::Command,
@@ -43,6 +50,17 @@ fn json_request<T: Serialize>(
 		return Err(error.into());
 	}
 	serde_json::from_slice(&output.stdout).context("Invalid JSON from Python runtime")
+}
+
+/// Variables as getenv resolves them: the first occurrence of a duplicated name wins.
+fn as_getenv(
+	variables: impl IntoIterator<Item = (OsString, OsString)>,
+) -> BTreeMap<OsString, OsString> {
+	let mut resolved: BTreeMap<OsString, OsString> = BTreeMap::new();
+	for (key, value) in variables {
+		resolved.entry(key).or_insert(value);
+	}
+	resolved
 }
 
 pub struct PythonRuntime {
@@ -101,9 +119,35 @@ impl PythonRuntime {
 		json_request(&mut self.command(operation), request, timeout)
 	}
 
-	pub fn exec(&self, operation: &str, settings: &Settings) -> Result<()> {
+	/// Replaces this process with a Python operation; `environment` adds variables on top of the
+	/// settings.
+	pub fn exec(
+		&self,
+		operation: &str,
+		settings: &Settings,
+		environment: &[(&str, &str)],
+	) -> Result<()> {
+		let error: std::io::Error = self
+			.exec_command(operation, settings, environment, &as_getenv(env::vars_os()))?
+			.exec();
+		bail!("Could not exec Python runtime: {error}")
+	}
+
+	/// The command `exec` replaces this process with, given the environment it inherits.
+	fn exec_command(
+		&self,
+		operation: &str,
+		settings: &Settings,
+		environment: &[(&str, &str)],
+		inherited: &BTreeMap<OsString, OsString>,
+	) -> Result<Command> {
+		let variable = |key: &str| -> Option<&str> {
+			inherited
+				.get(OsStr::new(key))
+				.and_then(|value| value.to_str())
+		};
 		let mut command: Command = self.command(operation);
-		let config_path: PathBuf = match env::var_os("CONFIG_FILE_PATH") {
+		let config_path: PathBuf = match inherited.get(OsStr::new("CONFIG_FILE_PATH")) {
 			Some(value) => {
 				let path: PathBuf = value.into();
 				// Python changes cwd before Gunicorn imports the gateway.
@@ -118,23 +162,41 @@ impl PythonRuntime {
 		};
 		command
 			.envs(settings.environment())
+			.envs(environment.iter().copied())
 			.env("CONFIG_FILE_PATH", config_path);
 		for (key, default) in [
 			("LITELLM_LOCAL_MODEL_COST_MAP", "True"),
 			("LITELLM_MODE", "PRODUCTION"),
 			("LITELLM_LOG", "WARNING"),
-			("AZURE_TOKEN_CREDENTIALS", "ManagedIdentityCredential"),
-			("AZURE_CREDENTIAL", "DefaultAzureCredential"),
-		] {
-			command.env(key, env::var(key).unwrap_or_else(|_| default.into()));
+		]
+		.iter()
+		.chain(settings.credential_environment())
+		{
+			command.env(key, variable(key).unwrap_or(default));
 		}
-		let key: String = env::var("LITELLM_MASTER_KEY")
-			.ok()
+		if let Mode::Gateway { .. } = settings.mode {
+			// Each gateway worker reads the upstream key file when it starts, so a reload applies
+			// a rotated key; serve only checks the file first. No operation inherits the key, and
+			// no inherited Azure credential selector may reach LiteLLM or the Azure SDK.
+			if operation == "serve" {
+				files::upstream_key(&settings.upstream_key_path())?;
+			}
+			command.env_remove(files::UPSTREAM_KEY);
+			for key in inherited
+				.keys()
+				.filter(|key| key.as_encoded_bytes().starts_with(b"AZURE_"))
+			{
+				command.env_remove(key);
+			}
+		}
+		let key: String = variable("LITELLM_MASTER_KEY")
 			.filter(|value| !value.is_empty())
-			.map_or_else(|| files::local_key(&settings.key_path()), Ok)?;
+			.map_or_else(
+				|| files::local_key(&settings.key_path()),
+				|value| Ok(value.into()),
+			)?;
 		command.env("LITELLM_MASTER_KEY", key);
-		let error: std::io::Error = command.exec();
-		bail!("Could not exec Python runtime: {error}")
+		Ok(command)
 	}
 }
 
@@ -184,7 +246,10 @@ impl Runtime for PythonRuntime {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use std::{fs, os::unix::fs::symlink};
+	use std::{
+		fs,
+		os::unix::fs::{PermissionsExt, symlink},
+	};
 
 	fn mock_command(root: &Path, response: &str, status: u8) -> Command {
 		let script: String = format!(
@@ -247,6 +312,125 @@ mod tests {
 			Some(403)
 		);
 		assert!(!error.to_string().contains("token-secret-sentinel"));
+	}
+
+	/// Variables a command sets (`Some`) or removes (`None`) on top of the inherited environment.
+	fn overrides(command: &Command) -> BTreeMap<String, Option<String>> {
+		command
+			.get_envs()
+			.map(|(key, value)| {
+				(
+					key.to_string_lossy().into_owned(),
+					value.map(|value| value.to_string_lossy().into_owned()),
+				)
+			})
+			.collect()
+	}
+
+	#[test]
+	fn serve_environment_follows_the_mode() {
+		let root: tempfile::TempDir = tempfile::tempdir().unwrap();
+		let runtime: PythonRuntime = PythonRuntime {
+			python: "/missing/python".into(),
+			isolated: true,
+		};
+		let inherited: BTreeMap<OsString, OsString> = [
+			("LITELLM_MASTER_KEY", "sk-trapi-local"),
+			("AZURE_CREDENTIAL", "AzureCliCredential"),
+			("AZURE_CLIENT_ID", ""),
+			("AZURE_TENANT_ID", "tenant"),
+			("TRAPI2LITELLM_UPSTREAM_KEY", "sk-inherited"),
+		]
+		.into_iter()
+		.map(|(key, value)| (key.into(), value.into()))
+		.collect();
+		let managed: BTreeMap<String, Option<String>> = overrides(
+			&runtime
+				.exec_command(
+					"serve",
+					&crate::settings::test_settings(root.path()),
+					&[],
+					&inherited,
+				)
+				.unwrap(),
+		);
+		assert_eq!(
+			managed["AZURE_TOKEN_CREDENTIALS"].as_deref(),
+			Some("ManagedIdentityCredential")
+		);
+		assert_eq!(
+			managed["AZURE_CREDENTIAL"].as_deref(),
+			Some("AzureCliCredential")
+		);
+		assert!(!managed.contains_key("TRAPI2LITELLM_MODE"));
+		let settings: Settings = crate::settings::test_gateway_settings(root.path());
+		assert!(
+			format!(
+				"{:#}",
+				runtime
+					.exec_command("serve", &settings, &[], &inherited)
+					.unwrap_err()
+			)
+			.contains("requires the upstream key file")
+		);
+		fs::create_dir_all(&settings.config_dir).unwrap();
+		let path: PathBuf = settings.upstream_key_path();
+		fs::write(&path, "TRAPI2LITELLM_UPSTREAM_KEY=sk-upstream\n").unwrap();
+		fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+		let relay: BTreeMap<String, Option<String>> = overrides(
+			&runtime
+				.exec_command("serve", &settings, &[], &inherited)
+				.unwrap(),
+		);
+		// The gateway workers read the key file themselves; nothing passes the key on.
+		assert_eq!(relay["TRAPI2LITELLM_UPSTREAM_KEY"], None);
+		assert!(!format!("{relay:?}").contains("sk-upstream"));
+		assert_eq!(relay["TRAPI2LITELLM_MODE"].as_deref(), Some("gateway"));
+		assert_eq!(
+			relay["TRAPI2LITELLM_UPSTREAM_URL"].as_deref(),
+			Some("http://127.0.0.1:14000")
+		);
+		assert_eq!(
+			relay["LITELLM_MASTER_KEY"].as_deref(),
+			Some("sk-trapi-local")
+		);
+		assert_eq!(relay["LITELLM_MODE"].as_deref(), Some("PRODUCTION"));
+		for key in ["AZURE_CREDENTIAL", "AZURE_CLIENT_ID", "AZURE_TENANT_ID"] {
+			assert_eq!(relay[key], None, "{key} must be removed");
+		}
+		assert!(!relay.contains_key("AZURE_TOKEN_CREDENTIALS"));
+		assert!(
+			relay
+				.iter()
+				.filter(|(key, _)| key.starts_with("AZURE_"))
+				.all(|(_, value)| value.is_none())
+		);
+		// Only serve needs the key file; the smoke test never sees the key.
+		fs::remove_file(&path).unwrap();
+		let smoke: BTreeMap<String, Option<String>> = overrides(
+			&runtime
+				.exec_command("smoke-test", &settings, &[], &inherited)
+				.unwrap(),
+		);
+		assert_eq!(smoke["TRAPI2LITELLM_UPSTREAM_KEY"], None);
+		assert!(!format!("{smoke:?}").contains("sk-inherited"));
+	}
+
+	#[test]
+	fn duplicated_variables_resolve_like_getenv() {
+		let variables: Vec<(OsString, OsString)> = [
+			("CONFIG_FILE_PATH", "/first.yaml"),
+			("LITELLM_LOG", "FIRST"),
+			("CONFIG_FILE_PATH", "/second.yaml"),
+			("LITELLM_LOG", "SECOND"),
+		]
+		.into_iter()
+		.map(|(key, value)| (key.into(), value.into()))
+		.collect();
+		let resolved: BTreeMap<OsString, OsString> = as_getenv(variables);
+		assert_eq!(resolved.len(), 2);
+		assert_eq!(resolved[OsStr::new("CONFIG_FILE_PATH")], "/first.yaml");
+		assert_eq!(resolved[OsStr::new("LITELLM_LOG")], "FIRST");
 	}
 
 	#[test]

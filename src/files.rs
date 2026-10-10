@@ -1,11 +1,18 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use rand::{RngCore, rngs::OsRng};
 use std::{
 	fs::{self, File, OpenOptions, Permissions},
-	io::Write,
-	os::unix::fs::PermissionsExt,
+	io::{ErrorKind, Read, Write},
+	os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
 	path::Path,
 };
+
+pub const UPSTREAM_KEY: &str = "TRAPI2LITELLM_UPSTREAM_KEY";
+
+/// Quotes `text` as one POSIX shell word.
+pub fn shell_quote(text: &str) -> String {
+	format!("'{}'", text.replace('\'', "'\"'\"'"))
+}
 
 pub fn private_directory(path: &Path) -> Result<()> {
 	fs::create_dir_all(path)?;
@@ -14,10 +21,19 @@ pub fn private_directory(path: &Path) -> Result<()> {
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+	atomic_write_in(
+		path,
+		bytes,
+		path.parent().context("File has no parent directory")?,
+	)
+}
+
+/// Writes through a temporary file in `temporary_dir`, which must share the volume of `path`.
+pub fn atomic_write_in(path: &Path, bytes: &[u8], temporary_dir: &Path) -> Result<()> {
 	let parent: &Path = path.parent().context("File has no parent directory")?;
 	let mut temporary: tempfile::NamedTempFile = tempfile::Builder::new()
 		.prefix(".trapi2litellm-")
-		.tempfile_in(parent)?;
+		.tempfile_in(temporary_dir)?;
 	temporary
 		.as_file()
 		.set_permissions(Permissions::from_mode(0o600))?;
@@ -52,15 +68,77 @@ pub fn bootstrap_key(path: &Path) -> Result<()> {
 	Ok(())
 }
 
+/// Value of the first nonempty `name=value` line of a key file.
+fn assignment(text: &str, name: &str) -> Option<String> {
+	text.lines().find_map(|line| {
+		line.strip_prefix(name)?
+			.strip_prefix('=')
+			.filter(|value| !value.is_empty())
+			.map(str::to_owned)
+	})
+}
+
 pub fn local_key(path: &Path) -> Result<String> {
-	fs::read_to_string(path)?
-		.lines()
-		.find_map(|line| {
-			line.strip_prefix("LITELLM_MASTER_KEY=")
-				.filter(|value| !value.is_empty())
-				.map(str::to_owned)
-		})
+	assignment(&fs::read_to_string(path)?, "LITELLM_MASTER_KEY")
 		.context("gateway.env has no local master key")
+}
+
+/// Reads the upstream gateway's master key, which the user provisions and only its owner may
+/// access. Checks and reads one open file, so a swapped path cannot slip past the checks. Errors
+/// name the file but never its content.
+pub fn upstream_key(path: &Path) -> Result<String> {
+	let file: std::path::Display<'_> = path.display();
+	let quoted: String = shell_quote(&path.to_string_lossy());
+	let remedy: String = format!(
+		"create it with `install -d -m 700 {} && install -m 600 /dev/null {quoted}` and add the line {UPSTREAM_KEY}=<upstream gateway master key> in an editor",
+		shell_quote(
+			&path
+				.parent()
+				.context("Key file has no parent directory")?
+				.to_string_lossy()
+		)
+	);
+	// Nonblocking, so that a FIFO in its place fails the regular-file check instead of hanging.
+	let mut handle: File = match OpenOptions::new()
+		.read(true)
+		.custom_flags(libc::O_NONBLOCK)
+		.open(path)
+	{
+		Ok(handle) => handle,
+		Err(error) if error.kind() == ErrorKind::NotFound => {
+			bail!("Gateway mode requires the upstream key file {file}; {remedy}")
+		}
+		Err(error) => return Err(error).with_context(|| format!("Cannot open {file}")),
+	};
+	let metadata: fs::Metadata = handle
+		.metadata()
+		.with_context(|| format!("Cannot inspect {file}"))?;
+	ensure!(
+		metadata.is_file(),
+		"{file} must be a regular file; {remedy}"
+	);
+	// getuid has no pointer arguments or failure mode.
+	ensure!(
+		metadata.uid() == unsafe { libc::getuid() },
+		"{file} must belong to the current user; {remedy}"
+	);
+	ensure!(
+		metadata.mode() & 0o077 == 0,
+		"{file} must be accessible only by its owner; run chmod 600 {quoted}, and rotate the upstream key if other users could have read it"
+	);
+	let mut text: String = String::new();
+	handle
+		.read_to_string(&mut text)
+		.with_context(|| format!("Cannot read {file}"))?;
+	let key: String = assignment(&text, UPSTREAM_KEY)
+		.with_context(|| format!("{file} has no nonempty {UPSTREAM_KEY}; {remedy}"))?;
+	// The gateway's Python reader applies the same rule.
+	ensure!(
+		key.bytes()
+			.all(|byte| byte.is_ascii_graphic() && byte != b'"' && byte != b'\''),
+		"{UPSTREAM_KEY} in {file} must be the bare key: printable ASCII without quotes, spaces or control characters"
+	);
+	Ok(key)
 }
 
 pub struct SyncLock {
@@ -89,6 +167,97 @@ mod tests {
 			fs::metadata(path).unwrap().permissions().mode() & 0o777,
 			0o600
 		);
+	}
+
+	#[test]
+	fn upstream_key_requires_a_private_nonempty_file() {
+		let root: tempfile::TempDir = tempfile::tempdir().unwrap();
+		let path: std::path::PathBuf = root.path().join("upstream.env");
+		let error = |path: &Path| -> String { format!("{:#}", upstream_key(path).unwrap_err()) };
+		let missing: String = error(&path);
+		assert!(missing.contains(&path.display().to_string()));
+		assert!(missing.contains(&format!(
+			"`install -d -m 700 '{}' && install -m 600 /dev/null '{}'`",
+			root.path().display(),
+			path.display()
+		)));
+		assert!(!path.exists(), "the key file must never be created");
+		for content in ["", "\n", "OTHER=x\n", "TRAPI2LITELLM_UPSTREAM_KEY=\n"] {
+			fs::write(&path, content).unwrap();
+			fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
+			assert!(error(&path).contains("has no nonempty TRAPI2LITELLM_UPSTREAM_KEY"));
+		}
+		fs::write(
+			&path,
+			"# relay\nTRAPI2LITELLM_UPSTREAM_KEY=sk-upstream-secret\n",
+		)
+		.unwrap();
+		for mode in [0o640, 0o604, 0o620, 0o644, 0o660] {
+			fs::set_permissions(&path, Permissions::from_mode(mode)).unwrap();
+			let message: String = error(&path);
+			assert!(message.contains("chmod 600"), "{mode:o}");
+			assert!(message.contains("rotate the upstream key"), "{mode:o}");
+			assert!(!message.contains("sk-upstream-secret"));
+		}
+		for mode in [0o600, 0o400] {
+			fs::set_permissions(&path, Permissions::from_mode(mode)).unwrap();
+			assert_eq!(upstream_key(&path).unwrap(), "sk-upstream-secret");
+		}
+		fs::set_permissions(&path, Permissions::from_mode(0o600)).unwrap();
+		fs::write(&path, "TRAPI2LITELLM_UPSTREAM_KEY=sk-crlf\r\n").unwrap();
+		assert_eq!(upstream_key(&path).unwrap(), "sk-crlf");
+		for value in [
+			"\"sk-upstream-secret\"",
+			"'sk-upstream-secret'",
+			"sk-upstream-secret ",
+			" sk-upstream-secret",
+			"sk-upstream secret",
+			"sk-upstream-secret\r",
+			"sk-upstream-secret\t",
+			"sk-upstream\u{7f}secret",
+			"sk-upstream-\u{e9}",
+		] {
+			fs::write(&path, format!("TRAPI2LITELLM_UPSTREAM_KEY={value}")).unwrap();
+			let message: String = error(&path);
+			assert!(message.contains("must be the bare key"), "{value:?}");
+			assert!(!message.contains("sk-upstream"), "{value:?}: {message}");
+		}
+		assert!(error(root.path()).contains("must be a regular file"));
+	}
+
+	#[test]
+	fn upstream_key_checks_the_target_of_a_symbolic_link() {
+		let root: tempfile::TempDir = tempfile::tempdir().unwrap();
+		let target: std::path::PathBuf = root.path().join("target.env");
+		let link: std::path::PathBuf = root.path().join("upstream.env");
+		fs::write(&target, "TRAPI2LITELLM_UPSTREAM_KEY=sk-linked\n").unwrap();
+		std::os::unix::fs::symlink(&target, &link).unwrap();
+		fs::set_permissions(&target, Permissions::from_mode(0o644)).unwrap();
+		assert!(
+			format!("{:#}", upstream_key(&link).unwrap_err())
+				.contains("must be accessible only by its owner")
+		);
+		fs::set_permissions(&target, Permissions::from_mode(0o600)).unwrap();
+		assert_eq!(upstream_key(&link).unwrap(), "sk-linked");
+	}
+
+	#[test]
+	fn upstream_key_refuses_a_fifo_without_blocking() {
+		let root: tempfile::TempDir = tempfile::tempdir().unwrap();
+		let path: std::path::PathBuf = root.path().join("upstream.env");
+		let name: std::ffi::CString =
+			std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).unwrap();
+		// The path is a valid C string and the mode has no special bits.
+		assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+		assert!(
+			format!("{:#}", upstream_key(&path).unwrap_err()).contains("must be a regular file")
+		);
+	}
+
+	#[test]
+	fn shell_quote_keeps_one_word() {
+		assert_eq!(shell_quote("/a b/c"), "'/a b/c'");
+		assert_eq!(shell_quote("it's"), "'it'\"'\"'s'");
 	}
 
 	#[test]

@@ -1,0 +1,74 @@
+{
+  "model_list": [
+    {
+      "model_name": "trapi/Qwen/Qwen3.5-9B",
+      "litellm_params": {
+        "model": "azure/Qwen/Qwen3.5-9B",
+        "api_base": "https://trapi.research.microsoft.com/redmond/interactive",
+        "api_version": "2025-04-01-preview",
+        "azure_scope": "api://trapi/.default"
+      },
+      "model_info": {
+        "availability_evidence": "catalog_only_not_an_inference_health_check",
+        "capabilities": {
+          "embeddings": true
+        },
+        "id": "afb2b5e6380c77772e5c38995d95554e64a7680dd24bceb7fed27957f0e4d4d4",
+        "mode": "embedding",
+        "provisioning_state": "Succeeded",
+        "rate_limits": null,
+        "source": "trapi",
+        "upstream_deployment": "Qwen/Qwen3.5-9B",
+        "upstream_model": null
+      }
+    },
+    {
+      "model_name": "trapi/gpt-5.2_2025-12-11",
+      "litellm_params": {
+        "model": "azure/gpt-5.2_2025-12-11",
+        "api_base": "https://trapi.research.microsoft.com/redmond/interactive",
+        "api_version": "2025-04-01-preview",
+        "azure_scope": "api://trapi/.default"
+      },
+      "model_info": {
+        "availability_evidence": "catalog_only_not_an_inference_health_check",
+        "base_model": "azure/gpt-5.2",
+        "capabilities": {
+          "chatCompletion": "true",
+          "maxContextToken": "1234"
+        },
+        "id": "fc0f00852c6690b02cc3181258e3b2785ae2c189ab401b4862dac0f4b832a0e2",
+        "mode": "chat",
+        "provisioning_state": "Succeeded",
+        "rate_limits": {
+          "RequestsPerMinute": {
+            "count": 60
+          },
+          "TokensPerMinute": 100000
+        },
+        "source": "trapi",
+        "upstream_deployment": "gpt-5.2_2025-12-11",
+        "upstream_model": {
+          "Format": "OpenAI",
+          "Name": "gpt-5.2"
+        }
+      }
+    }
+  ],
+  "litellm_settings": {
+    "drop_params": false,
+    "enable_azure_ad_token_refresh": true,
+    "set_verbose": false,
+    "telemetry": false,
+    "turn_off_message_logging": true
+  },
+  "router_settings": {
+    "fallbacks": [],
+    "num_retries": 0,
+    "timeout": 600
+  },
+  "general_settings": {
+    "disable_spend_logs": true,
+    "master_key": "os.environ/LITELLM_MASTER_KEY"
+  }
+}

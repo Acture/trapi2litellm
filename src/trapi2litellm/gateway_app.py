@@ -8,6 +8,8 @@ import hashlib
 import hmac
 import json
 import os
+import re
+import stat
 from pathlib import Path
 
 from starlette.requests import Request
@@ -17,6 +19,38 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from trapi2litellm.model_view import ModelView
 from trapi2litellm.usage import UsageRecorder, UsageStore
 
+UPSTREAM_KEY = "TRAPI2LITELLM_UPSTREAM_KEY"
+
+
+def upstream_key(path: Path) -> str:
+    """The upstream gateway's master key, checked as the native command checks it.
+
+    Errors name the file but never its content.
+    """
+    # Nonblocking, so that a FIFO in its place fails the regular-file check instead of hanging.
+    with open(os.open(path, os.O_RDONLY | os.O_NONBLOCK), "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeError(f"{path} must be a regular file")
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise RuntimeError(f"{path} must belong to the current user and be private to them")
+        text = handle.read().decode()
+    prefix = UPSTREAM_KEY + "="
+    key = next(
+        (
+            line.removeprefix(prefix)
+            for line in re.split("\r?\n", text)
+            if line.startswith(prefix) and line != prefix
+        ),
+        None,
+    )
+    if key is None:
+        raise RuntimeError(f"{path} has no nonempty {UPSTREAM_KEY}")
+    if not all("!" <= character <= "~" and character not in "\"'" for character in key):
+        raise RuntimeError(f"{UPSTREAM_KEY} in {path} must be the bare key")
+    return key
+
+
 CONFIG_PATH: Path = Path(os.environ["CONFIG_FILE_PATH"])
 STATE_DIR: Path = Path(os.environ["TRAPI2LITELLM_STATE_DIR"])
 CONFIG_BYTES: bytes = CONFIG_PATH.read_bytes()
@@ -24,6 +58,17 @@ CONFIG_SHA256 = hashlib.sha256(CONFIG_BYTES).hexdigest()
 MASTER_KEY = os.environ["LITELLM_MASTER_KEY"].encode()
 if not MASTER_KEY:
     raise RuntimeError("A nonempty local master key is required")
+# How models reach TRAPI; a relay names its upstream gateway but never the upstream key.
+AUTHENTICATION: dict[str, str] = {
+    "authentication": os.environ.get("TRAPI2LITELLM_MODE", "managed_identity")
+}
+if AUTHENTICATION["authentication"] == "gateway":
+    AUTHENTICATION["upstream_url"] = os.environ["TRAPI2LITELLM_UPSTREAM_URL"]
+    # LiteLLM resolves os.environ/ references when each worker loads the configuration. Each
+    # worker reads the key file as it starts, so a reload applies a rotated key.
+    os.environ[UPSTREAM_KEY] = upstream_key(
+        Path(os.environ["TRAPI2LITELLM_CONFIG_DIR"]) / "upstream.env"
+    )
 
 from litellm.proxy.proxy_server import app as upstream_app
 
@@ -67,7 +112,7 @@ async def status(request: Request) -> JSONResponse:
         "gateway": "trapi2litellm",
         "litellm_version": version("litellm"),
         "config_sha256": CONFIG_SHA256,
-        "authentication": "managed_identity",
+        **AUTHENTICATION,
     }
     for name in ("sync-status", "sync-error", "deployment-status"):
         path = STATE_DIR / (name + ".json")

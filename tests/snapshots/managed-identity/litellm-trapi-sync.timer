@@ -1,0 +1,12 @@
+# Managed by trapi2litellm
+[Unit]
+Description=Refresh TRAPI model catalog every hour
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=120
+Persistent=true
+Unit=litellm-trapi-sync.service
+
+[Install]
+WantedBy=timers.target

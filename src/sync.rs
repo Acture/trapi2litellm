@@ -52,60 +52,69 @@ impl Service for SystemService<'_> {
 		)
 	}
 	fn wait_for_models(&self, expected: &BTreeSet<String>, digest: &str) -> Result<()> {
-		let key: String = files::local_key(&self.settings.key_path())?;
-		let client: Client = Client::builder()
-			.no_proxy()
-			.timeout(Duration::from_secs(5))
-			.redirect(reqwest::redirect::Policy::none())
-			.build()?;
-		let started: Instant = Instant::now();
-		let mut consecutive: u8 = 0;
-		let mut progress: Instant = started;
-		eprintln!("INFO waiting for gateway readiness (3 consecutive model/hash matches)");
-		while started.elapsed() < Duration::from_secs(90) {
-			let matches: bool = (|| -> Result<bool> {
-				let response: reqwest::blocking::Response = client
-					.get(format!("{}/v1/models", self.settings.local_url()))
-					.bearer_auth(&key)
-					.header("Connection", "close")
-					.send()?
-					.error_for_status()?;
-				if response
-					.headers()
-					.get("x-trapi-config-sha256")
-					.and_then(|value| value.to_str().ok())
-					!= Some(digest)
-				{
-					return Ok(false);
-				}
-				let response: ModelResponse = response.json()?;
-				Ok(response
-					.data
-					.into_iter()
-					.map(|model| model.id)
-					.collect::<BTreeSet<String>>()
-					== *expected)
-			})()
-			.unwrap_or(false);
-			consecutive = if matches { consecutive + 1 } else { 0 };
-			if consecutive >= 3 {
-				eprintln!(
-					"INFO gateway ready in {:.2}s",
-					started.elapsed().as_secs_f64()
-				);
-				return Ok(());
-			}
-			if progress.elapsed() >= Duration::from_secs(10) {
-				eprintln!(
-					"INFO waiting for gateway readiness ({:.0}s elapsed; {consecutive}/3 consecutive matches)",
-					started.elapsed().as_secs_f64()
-				);
-				progress = Instant::now();
-			}
-			thread::sleep(Duration::from_secs(1));
-		}
-		bail!("Gateway did not expose the expected model list within 90 seconds")
+		wait_for_models(self.settings, expected, digest)
 	}
+}
+
+/// Polls the loopback gateway until three consecutive model lists match `expected` and `digest`.
+pub fn wait_for_models(
+	settings: &Settings,
+	expected: &BTreeSet<String>,
+	digest: &str,
+) -> Result<()> {
+	let key: String = files::local_key(&settings.key_path())?;
+	let client: Client = Client::builder()
+		.no_proxy()
+		.timeout(Duration::from_secs(5))
+		.redirect(reqwest::redirect::Policy::none())
+		.build()?;
+	let started: Instant = Instant::now();
+	let mut consecutive: u8 = 0;
+	let mut progress: Instant = started;
+	eprintln!("INFO waiting for gateway readiness (3 consecutive model/hash matches)");
+	while started.elapsed() < Duration::from_secs(90) {
+		let matches: bool = (|| -> Result<bool> {
+			let response: reqwest::blocking::Response = client
+				.get(format!("{}/v1/models", settings.local_url()))
+				.bearer_auth(&key)
+				.header("Connection", "close")
+				.send()?
+				.error_for_status()?;
+			if response
+				.headers()
+				.get("x-trapi-config-sha256")
+				.and_then(|value| value.to_str().ok())
+				!= Some(digest)
+			{
+				return Ok(false);
+			}
+			let response: ModelResponse = response.json()?;
+			Ok(response
+				.data
+				.into_iter()
+				.map(|model| model.id)
+				.collect::<BTreeSet<String>>()
+				== *expected)
+		})()
+		.unwrap_or(false);
+		consecutive = if matches { consecutive + 1 } else { 0 };
+		if consecutive >= 3 {
+			eprintln!(
+				"INFO gateway ready in {:.2}s",
+				started.elapsed().as_secs_f64()
+			);
+			return Ok(());
+		}
+		if progress.elapsed() >= Duration::from_secs(10) {
+			eprintln!(
+				"INFO waiting for gateway readiness ({:.0}s elapsed; {consecutive}/3 consecutive matches)",
+				started.elapsed().as_secs_f64()
+			);
+			progress = Instant::now();
+		}
+		thread::sleep(Duration::from_secs(1));
+	}
+	bail!("Gateway did not expose the expected model list within 90 seconds")
 }
 #[derive(Deserialize)]
 struct ModelResponse {

@@ -60,8 +60,11 @@ docker run --rm --volume "$PWD:/src" trapi2litellm-builder python3 packaging/bui
 ```
 
 The workflow in `.github/workflows/ci.yml` includes native arm64 and amd64
-builders and offline Debian lifecycle checks. Consult STATUS for which checks
-have actually run against the current migration.
+builders, offline Debian lifecycle checks, and a macOS job. That job runs the
+source checks (including the minimum compiler), the wheel/sdist/uv tool
+acceptance with a gateway-mode install-only deployment, a `plutil` lint of the
+previewed and staged plists, and a real launchd rollback test. Consult STATUS
+for which checks have actually run against the current migration.
 
 ## Live Azure acceptance
 
@@ -75,7 +78,8 @@ recorded separately from the packaging CI result.
 
 ## Upgrade and removal
 
-Before uninstalling a running installation, stop its user units:
+Before uninstalling a running Linux installation, stop its user units (for
+macOS, see [Deploy on macOS](../README.md#deploy-on-macos)):
 
 ```fish
 systemctl --user disable --now litellm-trapi.service litellm-trapi-sync.timer
@@ -86,7 +90,9 @@ Remove the three generated units from `~/.config/systemd/user` and run
 `systemctl --user daemon-reload`, then uninstall the tool/package. User keys,
 configuration and state are retained by package removal and purge. Upgrading a
 package leaves a running gateway on its current workers; run `deploy --start`
-to validate the new installation and restart it.
+to validate the new installation. It restarts the gateway only if its unit
+changed and otherwise reloads its workers, while the Gunicorn master keeps the
+modules it already loaded; restart the service for a full restart.
 
 `deploy --start` holds the synchronization lock through activation. On failure
 it restores the previous configuration, catalog/sync status, generated units
@@ -106,5 +112,7 @@ does not record those settings in the generated form. A newly enabled linger set
 failure; an existing linger setting is retained.
 
 The installed-distribution CI runs real user-systemd rollback checks for first
-deployment and redeployment on both architectures. These use a synthetic catalog
-and an inert sync-service fixture; they never authenticate to Azure.
+deployment and redeployment on both architectures, and the macOS job runs the
+same checks against the runner's launchd GUI domain. These use a synthetic
+catalog and an inert sync job; they never authenticate to Azure or contact an
+upstream gateway.

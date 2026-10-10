@@ -10,6 +10,7 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 LOG = logging.getLogger(__name__)
 
@@ -27,6 +28,26 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str], capture: bool = F
     )
     LOG.info("Finished in %.1fs", time.monotonic() - started)
     return result.stdout or ""
+
+
+def run_ignored_test(name: str, *, cwd: Path, env: dict[str, str]) -> None:
+    """Run one ignored Rust test, failing if no test has that exact name.
+
+    libtest passes an exact filter that matches nothing, so a renamed test would skip silently.
+    """
+    command = ["cargo", "test", "--locked", "--offline", name, "--", "--ignored", "--exact"]
+    listing = run([*command, "--list"], cwd=cwd, env=env, capture=True)
+    if f"{name}: test" not in listing.splitlines():
+        raise AssertionError(f"No ignored test named {name}:\n{listing}")
+    run(command, cwd=cwd, env=env)
+
+
+def launch_agents() -> dict[Path, int]:
+    """Modification times of the published trapi2litellm LaunchAgents."""
+    agents = Path.home() / "Library/LaunchAgents"
+    return {
+        path: path.stat().st_mtime_ns for path in agents.glob("io.github.acture.trapi2litellm.*")
+    }
 
 
 def main() -> None:
@@ -130,14 +151,24 @@ def main() -> None:
         ]
         run([*uvx, "--version"], cwd=work, env=env)
         run([*uvx, "deploy", "--dry-run"], cwd=work, env=env, capture=True)
+        # macOS deploys only in gateway mode; install-only needs no upstream key.
+        relay: dict[str, str] = (
+            {
+                "TRAPI2LITELLM_MODE": "gateway",
+                "TRAPI2LITELLM_UPSTREAM_URL": "http://127.0.0.1:14000",
+            }
+            if sys.platform == "darwin"
+            else {}
+        )
         rejected = subprocess.run(
-            [*uvx, "deploy"], cwd=work, env=env, capture_output=True, text=True
+            [*uvx, "deploy"], cwd=work, env={**env, **relay}, capture_output=True, text=True
         )
         if rejected.returncode == 0 or "non-persistent" not in rejected.stderr:
             raise AssertionError(f"uvx deployment was not refused: {rejected.stderr}")
         tool_root = args.tool_root.resolve() if args.tool_root else work / "tools"
         tool_env = {
             **env,
+            **relay,
             "UV_TOOL_DIR": str(tool_root / "envs"),
             "UV_TOOL_BIN_DIR": str(tool_root / "bin"),
         }
@@ -168,33 +199,42 @@ def main() -> None:
         tool_env["PATH"] = str(tool_root / "bin") + os.pathsep + tool_env["PATH"]
         run([command, "--version"], cwd=work, env=tool_env)
         preview = run([command, "deploy", "--dry-run"], cwd=work, env=tool_env, capture=True)
-        if f'ExecStart="{command}" serve' not in preview or "WorkingDirectory" in preview:
+        stable = (
+            f"<string>{escape(command)}</string>\n\t\t<string>serve</string>"
+            if sys.platform == "darwin"
+            else f'ExecStart="{command}" serve'
+        )
+        if stable not in preview or "WorkingDirectory" in preview:
             raise AssertionError("uv tool unit did not use its stable command")
         if args.tool_root:
+            published = launch_agents() if sys.platform == "darwin" else {}
             rejected = subprocess.run(
                 [command, "deploy"], cwd=work, env=tool_env, capture_output=True, text=True
             )
-            # A non-Linux host can reject systemd; a persistent Linux CI host
-            # must complete install-only deployment without Azure access.
+            # Persistent Linux and macOS hosts must complete install-only
+            # deployment without Azure access; other hosts are refused.
             if sys.platform.startswith("linux"):
                 if rejected.returncode:
                     print(rejected.stderr, file=sys.stderr)
                 rejected.check_returncode()
                 run([args.python, str(root / "packaging/check_systemd.py")], cwd=work, env=tool_env)
-                run(
-                    [
-                        "cargo",
-                        "test",
-                        "--locked",
-                        "--offline",
-                        "deploy::transaction::tests::systemd_activation_rollback",
-                        "--",
-                        "--ignored",
-                        "--exact",
-                    ],
+                run_ignored_test(
+                    "deploy::transaction::tests::systemd_activation_rollback",
                     cwd=root,
                     env={**tool_env, "TRAPI2LITELLM_ACCEPTANCE_ENTRY": command},
                 )
+            elif sys.platform == "darwin":
+                if rejected.returncode:
+                    print(rejected.stderr, file=sys.stderr)
+                rejected.check_returncode()
+                staged = sorted(
+                    (Path(tool_env["TRAPI2LITELLM_CONFIG_DIR"]) / "launchd").glob("*.plist")
+                )
+                if len(staged) != 2:
+                    raise AssertionError(f"Install-only deployment staged {staged}")
+                run(["/usr/bin/plutil", "-lint", *map(str, staged)], cwd=work, env=tool_env)
+                if launch_agents() != published:
+                    raise AssertionError("Install-only deployment changed LaunchAgents")
             elif "non-persistent" in rejected.stderr:
                 raise AssertionError(rejected.stderr)
         LOG.info("Accepted installed wheel/sdist, uvx refusal and uv tool entry")
