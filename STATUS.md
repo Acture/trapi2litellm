@@ -1,10 +1,42 @@
 # Distribution status
 
-Current execution home: [OSS-381](https://linear.app/acturea/issue/OSS-381), model
-metadata and live local usage display. Rust control migration belongs to
+Current execution home: [OSS-396](https://linear.app/acturea/issue/OSS-396), macOS
+launchd deployment and gateway relay mode. Model metadata and live local usage
+display belongs to [OSS-381](https://linear.app/acturea/issue/OSS-381). Rust control migration belongs to
 [OSS-306](https://linear.app/acturea/issue/OSS-306). Earlier Python packaging acceptance belongs to
 [OSS-76](https://linear.app/acturea/issue/OSS-76), formerly P-866.
 This file owns measured packaging evidence; channel integration is P-867.
+
+## macOS launchd deployment and gateway relay (2026-10-10)
+
+Branch `oss-396-macos-launchd-relay`: `0aba1fe` (service-manager trait),
+`c3ed0c9` (launchd backend), `acb7218` (gateway relay mode), then docs and CI.
+Measured on macOS 26.6.2 arm64 (Apple M2 Max), outside any sandbox:
+
+| Check | Result |
+| --- | --- |
+| Rust | `cargo fmt --check` and `clippy -D warnings` clean; `cargo test --locked` 52 unit and 5 CLI tests passed, including the loopback readiness and relay mock-server tests |
+| Python | ruff, format and ty clean; 37 `unittest` tests passed, including the offline relay test that loads the gateway config into the real LiteLLM 1.99.0 proxy |
+| Installed gateway | `packaging/offline_gateway.py` in gateway mode: startup, authentication, metadata endpoints and HUP accepted |
+| Real launchd | Ignored `launchd_activation_rollback` passed against the installed wheel (temporary LaunchAgents directory, `test-<pid>` labels): first-deployment failure restored files and left no job loaded; activation reported a running gateway and an idle sync job from real `launchctl print` output; an interrupted readiness rolled back to the previous configuration hash; no test job remained loaded afterwards |
+
+Linux behavior: after the service-manager refactor, the systemd fault-matrix
+command log (373 lines of `systemctl`/`loginctl` calls, state queries, reloads
+and outcome messages) and `deploy --dry-run` output were byte-identical to
+`main` (`7a8214a`). Managed-identity configuration, units and plists are pinned
+by snapshots rendered from `c3ed0c9`.
+
+Relay against the production VM gateway (the earlier Python-era deployment,
+`litellm-trapi.service`) through a temporary SSH LocalForward: relay sync
+published 86 of 86 catalog entries; `/status` reported `gateway`; one
+`trapi/gpt-4.1-mini_2025-04-14` chat completion (15 tokens), one streaming chat
+with usage, and one `trapi/gpt-5.1_2025-11-13` Responses call (completed,
+24 tokens) succeeded through the Mac relay.
+
+Not yet measured: CI on this branch (Linux jobs and the new `macos-15` job),
+production cutover of the Mac's LaunchAgents, and upgrading the VM to this
+release. Mac `az login` is unavailable (AADSTS500341), so az-cli credentials
+are deferred to [OSS-397](https://linear.app/acturea/issue/OSS-397).
 
 ## Gateway model and usage display (2026-10-10)
 
