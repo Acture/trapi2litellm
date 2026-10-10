@@ -33,9 +33,17 @@ published 86 of 86 catalog entries; `/status` reported `gateway`; one
 with usage, and one `trapi/gpt-5.1_2025-11-13` Responses call (completed,
 24 tokens) succeeded through the Mac relay.
 
-Not yet measured: CI on this branch (Linux jobs and the new `macos-15` job),
-production cutover of the Mac's LaunchAgents, and upgrading the VM to this
-release. Mac `az login` is unavailable (AADSTS500341), so az-cli credentials
+CI: [run 38051255415](https://github.com/Acture/trapi2litellm/actions/runs/38051255415)
+on `e922ade` passed all ten jobs, including the new `macos-15` job (macOS
+15.7.9: Rust, Python, installed-wheel checks, plist lint and the real launchd
+acceptance test). The first run on `652a66a` failed only that acceptance step:
+the gateway stayed loaded after rollback while deploy used `launchctl bootout
+--wait`, which launchctl(1) does not document. `e922ade` boots out without
+`--wait` and polls `launchctl print` until the job is unloaded; the local real
+launchd acceptance then took 14.5 s instead of 34 s.
+
+Not yet measured: production cutover of the Mac's LaunchAgents, and upgrading
+the VM to this release. Mac `az login` is unavailable (AADSTS500341), so az-cli credentials
 are deferred to [OSS-397](https://linear.app/acturea/issue/OSS-397).
 
 ## Gateway model and usage display (2026-10-10)
