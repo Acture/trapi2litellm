@@ -1145,7 +1145,7 @@ mod tests {
 				manager.loaded_definition(job).display()
 			)
 		};
-		let bootout = |label: &str| format!("bootout --wait gui/501/{label}");
+		let bootout = |label: &str| format!("bootout gui/501/{label}");
 		let reload: String = format!("kill SIGHUP gui/501/{gateway}");
 		deploy(&plists)?;
 		ensure!(
@@ -1802,6 +1802,9 @@ mod tests {
 				failure.is_err(),
 				"First-deployment failure was not injected"
 			);
+			if let Err(error) = &failure {
+				eprintln!("INFO injected first-deployment failure: {error:#}");
+			}
 			ensure!(
 				!settings.config_path().exists() && settings.key_path().exists(),
 				"First deployment did not restore configuration and retain its retry key"

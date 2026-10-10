@@ -147,13 +147,13 @@ run `launchctl kickstart -k gui/$(id -u)/io.github.acture.trapi2litellm.gateway`
 afterwards.
 
 To uninstall, boot out both jobs, remove their plists and the staging
-directory, then the tool; `bootout --wait` returns once the gateway has drained
-and exited, which can take up to 930 seconds. Keys, configuration, state and
+directory, then the tool. The gateway drains for up to 930 seconds after
+`bootout`; wait until `launchctl print` no longer finds it before reusing the port. Keys, configuration, state and
 `~/Library/Logs/trapi2litellm` remain until removed separately.
 
 ```sh
-launchctl bootout --wait gui/$(id -u)/io.github.acture.trapi2litellm.sync
-launchctl bootout --wait gui/$(id -u)/io.github.acture.trapi2litellm.gateway
+launchctl bootout gui/$(id -u)/io.github.acture.trapi2litellm.sync
+launchctl bootout gui/$(id -u)/io.github.acture.trapi2litellm.gateway
 rm ~/Library/LaunchAgents/io.github.acture.trapi2litellm.sync.plist ~/Library/LaunchAgents/io.github.acture.trapi2litellm.gateway.plist
 rm -r ~/.config/litellm-trapi/launchd
 uv tool uninstall trapi2litellm

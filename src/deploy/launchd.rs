@@ -16,7 +16,8 @@ use std::{
 	os::unix::fs::{MetadataExt, PermissionsExt},
 	path::{Path, PathBuf},
 	process::Command,
-	time::Duration,
+	thread,
+	time::{Duration, Instant},
 };
 
 pub const LABEL_PREFIX: &str = "io.github.acture.trapi2litellm";
@@ -27,8 +28,9 @@ const DOCTYPE: &str = r#"<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "h
 const SEARCH_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 /// `launchctl print` exit status for a service its domain has not loaded.
 const NOT_LOADED: i32 = 113;
-/// Outlasts the gateway's ExitTimeOut, after which launchd kills it and `bootout --wait` returns.
+/// Outlasts the gateway's ExitTimeOut, after which launchd kills it and unloads the job.
 const BOOTOUT_TIMEOUT: Duration = Duration::from_secs(960);
+const BOOTOUT_POLL: Duration = Duration::from_millis(250);
 const LAUNCHCTL_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// The property-list subset the renderer writes and the parser reads back.
@@ -684,8 +686,21 @@ impl<'a, H: LaunchHost> LaunchdManager<'a, H> {
 			LAUNCHCTL_TIMEOUT,
 		)
 	}
+	/// Polls instead of relying on `bootout --wait`, which launchctl(1) does not document; a plain
+	/// bootout can return while a draining gateway still runs.
 	fn bootout(&self, job: Job) -> Result<()> {
-		self.launchctl(&["bootout", "--wait", &self.target(job)], BOOTOUT_TIMEOUT)
+		self.launchctl(&["bootout", &self.target(job)], LAUNCHCTL_TIMEOUT)?;
+		let deadline: Instant = Instant::now() + BOOTOUT_TIMEOUT;
+		while self.loaded(job)? {
+			ensure!(
+				Instant::now() < deadline,
+				"{} is still loaded {}s after launchctl bootout",
+				self.label(job),
+				BOOTOUT_TIMEOUT.as_secs()
+			);
+			thread::sleep(BOOTOUT_POLL);
+		}
+		Ok(())
 	}
 	fn kickstart(&self, job: Job) -> Result<()> {
 		self.launchctl(&["kickstart", &self.target(job)], LAUNCHCTL_TIMEOUT)
@@ -1051,7 +1066,7 @@ pub(super) mod fixture {
 				before_effect: false,
 			}
 		}
-		/// Fails without taking effect, as a `bootout --wait` that times out does.
+		/// Fails without taking effect, as a refused `bootout` does.
 		pub const fn before(subcommand: &'static str, occurrence: usize) -> Self {
 			Self {
 				subcommand,
@@ -1122,7 +1137,7 @@ pub(super) mod fixture {
 	}
 
 	impl LaunchHost for LaunchdFixture {
-		fn run(&self, arguments: &[&str], timeout: Duration) -> Result<()> {
+		fn run(&self, arguments: &[&str], _timeout: Duration) -> Result<()> {
 			self.log.borrow_mut().push(arguments.join(" "));
 			let fired: Option<bool> = self.fire(arguments[0]);
 			ensure!(
@@ -1161,11 +1176,7 @@ pub(super) mod fixture {
 						},
 					);
 				}
-				["bootout", "--wait", target] => {
-					ensure!(
-						timeout >= Duration::from_secs(930),
-						"bootout --wait must outlast ExitTimeOut"
-					);
+				["bootout", target] => {
 					ensure!(
 						self.jobs
 							.borrow_mut()
@@ -1570,8 +1581,8 @@ mod tests {
 		assert_eq!(
 			host.take_log(),
 			[
-				format!("bootout --wait gui/501/{PREFIX}.sync"),
-				format!("bootout --wait gui/501/{gateway}"),
+				format!("bootout gui/501/{PREFIX}.sync"),
+				format!("bootout gui/501/{gateway}"),
 			]
 		);
 		fs::remove_file(manager.loaded_definition(Job::Gateway)).unwrap();
@@ -1673,8 +1684,8 @@ mod tests {
 		assert_eq!(
 			host.take_log(),
 			[
-				format!("bootout --wait gui/501/{PREFIX}.sync"),
-				format!("bootout --wait gui/501/{PREFIX}.gateway"),
+				format!("bootout gui/501/{PREFIX}.sync"),
+				format!("bootout gui/501/{PREFIX}.gateway"),
 			]
 		);
 		assert_eq!(manager.status(Job::Gateway).unwrap(), Status::Unloaded);
@@ -1703,8 +1714,8 @@ mod tests {
 		.unwrap();
 		assert!(manager.status(Job::Gateway).is_err());
 		host.run(
-			&["bootout", "--wait", &manager.target(Job::Gateway)],
-			BOOTOUT_TIMEOUT,
+			&["bootout", &manager.target(Job::Gateway)],
+			LAUNCHCTL_TIMEOUT,
 		)
 		.unwrap();
 		let agent: PathBuf = manager.loaded_definition(Job::Gateway);

@@ -161,8 +161,8 @@ jobs:
           set -x TRAPI2LITELLM_ACCEPTANCE_ENTRY "$RUNNER_TOOL_CACHE/trapi2litellm-acceptance/bin/trapi2litellm"
           set name deploy::transaction::tests::launchd_activation_rollback
           # An exact filter that matches nothing still passes, so require the test to exist.
-          cargo test --locked --offline $name -- --ignored --exact --list | string match -q "$name: test"; or exit
-          cargo test --locked --offline $name -- --ignored --exact
+          cargo test --locked --offline --bin trapi2litellm $name -- --ignored --exact --list | string match -q "$name: test"; or exit
+          cargo test --locked --offline --bin trapi2litellm $name -- --ignored --exact
 
   dist:
     name: Installed distributions (${{ matrix.runner }})
