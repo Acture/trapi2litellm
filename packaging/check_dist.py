@@ -30,6 +30,18 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str], capture: bool = F
     return result.stdout or ""
 
 
+def run_ignored_test(name: str, *, cwd: Path, env: dict[str, str]) -> None:
+    """Run one ignored Rust test, failing if no test has that exact name.
+
+    libtest passes an exact filter that matches nothing, so a renamed test would skip silently.
+    """
+    command = ["cargo", "test", "--locked", "--offline", name, "--", "--ignored", "--exact"]
+    listing = run([*command, "--list"], cwd=cwd, env=env, capture=True)
+    if f"{name}: test" not in listing.splitlines():
+        raise AssertionError(f"No ignored test named {name}:\n{listing}")
+    run(command, cwd=cwd, env=env)
+
+
 def launch_agents() -> dict[Path, int]:
     """Modification times of the published trapi2litellm LaunchAgents."""
     agents = Path.home() / "Library/LaunchAgents"
@@ -206,17 +218,8 @@ def main() -> None:
                     print(rejected.stderr, file=sys.stderr)
                 rejected.check_returncode()
                 run([args.python, str(root / "packaging/check_systemd.py")], cwd=work, env=tool_env)
-                run(
-                    [
-                        "cargo",
-                        "test",
-                        "--locked",
-                        "--offline",
-                        "deploy::transaction::tests::systemd_activation_rollback",
-                        "--",
-                        "--ignored",
-                        "--exact",
-                    ],
+                run_ignored_test(
+                    "deploy::transaction::tests::systemd_activation_rollback",
                     cwd=root,
                     env={**tool_env, "TRAPI2LITELLM_ACCEPTANCE_ENTRY": command},
                 )

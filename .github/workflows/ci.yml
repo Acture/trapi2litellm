@@ -92,6 +92,78 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  macos:
+    name: macOS source, distributions and launchd
+    runs-on: macos-15
+    # Bounds a hung launchctl, brew, cargo or uv step at the macOS billing rate.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.13"
+      - name: Install fish
+        # macOS runners provide python3 but not necessarily an unversioned python.
+        shell: python3 {0}
+        run: |
+          import subprocess
+          subprocess.run(["brew", "install", "fish"], check=True)
+      - name: Lint, types and offline tests
+        shell: fish {0}
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --component clippy,rustfmt; or exit
+          rustup default 1.99.0; or exit
+          cargo fmt --check; or exit
+          cargo clippy --locked --all-targets -- -D warnings; or exit
+          cargo test --locked; or exit
+          # The msrv job runs on Linux and never compiles macOS-only code.
+          rustup toolchain install 1.89.0 --profile minimal; or exit
+          cargo +1.89.0 check --locked --all-targets; or exit
+          uv sync --frozen; or exit
+          uv run --frozen ruff check .; or exit
+          uv run --frozen ruff format --check .; or exit
+          uv run --frozen ty check; or exit
+          uv run --frozen python -m unittest discover -s tests -v; or exit
+      - name: Wheel, sdist, uvx and persistent uv tool acceptance
+        shell: fish {0}
+        run: |
+          mkdir -p "$RUNNER_TOOL_CACHE/trapi2litellm-acceptance"
+          uv run --frozen python packaging/check_dist.py --python (uv python find 3.13) --tool-root "$RUNNER_TOOL_CACHE/trapi2litellm-acceptance"
+      - name: Lint the previewed LaunchAgent plists in gateway mode
+        shell: fish {0}
+        env:
+          TRAPI2LITELLM_MODE: gateway
+          TRAPI2LITELLM_UPSTREAM_URL: http://127.0.0.1:14000
+        run: |
+          # check_dist.py already lints the plists that install-only deployment stages; this
+          # checks that the human-readable preview splits into the same two valid plists.
+          set preview "$RUNNER_TEMP/launchd-preview"
+          mkdir -p $preview; or exit
+          "$RUNNER_TOOL_CACHE/trapi2litellm-acceptance/bin/trapi2litellm" deploy --dry-run >$preview/preview.txt; or exit
+          # The preview prints each plist after a "# <file name>" line.
+          awk -v dir=$preview '/^# /{file = dir "/" $2; next} {print > file}' $preview/preview.txt; or exit
+          set plists $preview/*.plist
+          test (count $plists) -eq 2; or exit
+          /usr/bin/plutil -lint $plists
+      - name: Require a launchd GUI domain
+        shell: fish {0}
+        run: |
+          # The next step loads real LaunchAgents; fail visibly rather than skip it.
+          if test (id -u) -eq 0; or not launchctl print gui/(id -u) >/dev/null
+            echo "::error::No launchd domain gui/"(id -u)" on this runner: the launchd acceptance test needs a logged-in desktop session"
+            exit 1
+          end
+      - name: Real launchd activation and rollback with the installed wheel
+        shell: fish {0}
+        run: |
+          set -x TRAPI2LITELLM_ACCEPTANCE_ENTRY "$RUNNER_TOOL_CACHE/trapi2litellm-acceptance/bin/trapi2litellm"
+          set name deploy::transaction::tests::launchd_activation_rollback
+          # An exact filter that matches nothing still passes, so require the test to exist.
+          cargo test --locked --offline $name -- --ignored --exact --list | string match -q "$name: test"; or exit
+          cargo test --locked --offline $name -- --ignored --exact
+
   dist:
     name: Installed distributions (${{ matrix.runner }})
     needs: [python, msrv]

@@ -39,7 +39,7 @@ def shared_library_dependencies(stage: Path, work: Path) -> str:
     debian = work / "debian"
     debian.mkdir()
     (debian / "control").write_text(
-        "Source: trapi2litellm\nSection: net\nPriority: optional\nMaintainer: Acture <acturea@gmail.com>\n\nPackage: trapi2litellm\nArchitecture: any\nDescription: Managed-identity TRAPI gateway\n"
+        "Source: trapi2litellm\nSection: net\nPriority: optional\nMaintainer: Acture <acturea@gmail.com>\n\nPackage: trapi2litellm\nArchitecture: any\nDescription: TRAPI discovery and LiteLLM gateway\n"
     )
     local: set[str] = set()
     for path in objects:
@@ -181,7 +181,7 @@ def main() -> None:
             // 1024
         )
         (control / "control").write_text(
-            f"Package: trapi2litellm\nVersion: {deb_version}\nArchitecture: {architecture}\nSection: net\nPriority: optional\nMaintainer: Acture <acturea@gmail.com>\nInstalled-Size: {installed_size}\nDepends: python3 (>= 3.{minor}), python3 (<< 3.{minor + 1}), systemd, dbus-user-session, procps, {dependencies}\nHomepage: https://github.com/Acture/trapi2litellm\nDescription: Managed-identity TRAPI discovery and local LiteLLM gateway\n Isolated locked application dependencies; explicit systemd user deployment.\n"
+            f"Package: trapi2litellm\nVersion: {deb_version}\nArchitecture: {architecture}\nSection: net\nPriority: optional\nMaintainer: Acture <acturea@gmail.com>\nInstalled-Size: {installed_size}\nDepends: python3 (>= 3.{minor}), python3 (<< 3.{minor + 1}), systemd, dbus-user-session, procps, {dependencies}\nHomepage: https://github.com/Acture/trapi2litellm\nDescription: TRAPI discovery (Managed Identity or gateway relay) and local LiteLLM gateway\n Isolated locked application dependencies; explicit systemd user deployment.\n"
         )
         destination = output / f"trapi2litellm_{deb_version}_{architecture}.deb"
         run(["dpkg-deb", "--root-owner-group", "--build", str(stage), str(destination)], work)

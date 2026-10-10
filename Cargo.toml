@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 license = "AGPL-3.0-only"
-description = "Managed-identity TRAPI discovery and a loopback LiteLLM gateway"
+description = "TRAPI discovery (Managed Identity or gateway relay) and a loopback LiteLLM gateway"
 repository = "https://github.com/Acture/trapi2litellm"
 
 [dependencies]

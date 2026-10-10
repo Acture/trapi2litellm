@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "trapi2litellm"
 version = "0.1.0"
-description = "Managed-identity TRAPI discovery and a local LiteLLM gateway"
+description = "TRAPI discovery (Managed Identity or gateway relay) and a local LiteLLM gateway"
 readme = "README.md"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE"]

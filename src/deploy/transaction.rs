@@ -1728,11 +1728,17 @@ mod tests {
 		let port: u16 = std::net::TcpListener::bind("127.0.0.1:0")?
 			.local_addr()?
 			.port();
-		let settings: Settings = Settings::from_env(crate::settings::Overrides {
-			config_dir: Some(root.join("config")),
-			state_dir: Some(root.join("state")),
-			port: Some(port),
-		})?;
+		// macOS serves only as a relay, which requires the upstream key file. Nothing contacts the
+		// upstream: the fixture runtime supplies the catalog.
+		let settings: Settings = Settings {
+			port,
+			..crate::settings::test_gateway_settings(&root)
+		};
+		files::private_directory(&settings.config_dir)?;
+		files::atomic_write(
+			&settings.upstream_key_path(),
+			b"TRAPI2LITELLM_UPSTREAM_KEY=sk-acceptance-fixture\n",
+		)?;
 		let prefix: String = format!("io.github.acture.trapi2litellm.test-{}", std::process::id());
 		let manager: LaunchdManager<'_, SystemLaunchHost> = LaunchdManager::new(
 			&SystemLaunchHost,
