@@ -1,10 +1,8 @@
-use super::{
-	DeployOptions, Enablement, Host, SYNC_SERVICE, TIMER, UnitState, managed_write, unit_quote,
-};
+use super::{DeployOptions, Job, ServiceManager, UnitState, managed_write, marked};
 use crate::{
 	catalog, files,
 	runtime::Runtime,
-	settings::{SERVICE, Settings},
+	settings::Settings,
 	sync::{self, Service},
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -50,32 +48,23 @@ impl SavedFile {
 struct DeploymentSnapshot {
 	files: BTreeMap<PathBuf, Option<SavedFile>>,
 	gateway: UnitState,
-	timer: UnitState,
+	sync: UnitState,
 	linger: Option<bool>,
-}
-
-fn control(host: &impl Host, arguments: &[&str]) -> Result<()> {
-	host.run(
-		"systemctl",
-		&std::iter::once("--user")
-			.chain(arguments.iter().copied())
-			.map(str::to_owned)
-			.collect::<Vec<String>>(),
-	)
 }
 
 impl DeploymentSnapshot {
 	fn capture(
-		host: &impl Host,
+		manager: &impl ServiceManager,
 		settings: &Settings,
 		options: &DeployOptions,
-		units: &BTreeMap<String, String>,
+		definitions: &BTreeMap<String, String>,
 		clients: &BTreeMap<String, String>,
 	) -> Result<Self> {
-		let unit_dir: PathBuf = settings.user_config_home.join("systemd/user");
-		let paths = units
+		let definitions_dir: &Path = manager.definitions_dir();
+		let paths = definitions
 			.keys()
-			.map(|name| unit_dir.join(name))
+			.map(|name| definitions_dir.join(name))
+			.chain(Job::ALL.map(|job| manager.loaded_definition(job)))
 			.chain(clients.keys().map(|name| settings.config_dir.join(name)))
 			.chain([
 				settings.config_path(),
@@ -87,11 +76,11 @@ impl DeploymentSnapshot {
 			.collect::<Result<_>>()?;
 		let snapshot: Self = Self {
 			files,
-			gateway: host.unit_state(SERVICE)?,
-			timer: host.unit_state(TIMER)?,
+			gateway: manager.state(Job::Gateway)?,
+			sync: manager.state(Job::Sync)?,
 			linger: options
 				.enable_linger
-				.then(|| host.linger_enabled())
+				.then(|| manager.linger()?.enabled())
 				.transpose()?,
 		};
 		if snapshot.gateway.active {
@@ -99,35 +88,21 @@ impl DeploymentSnapshot {
 				snapshot.config(settings).is_some(),
 				"An active gateway requires its existing configuration directory"
 			);
-			let old_unit: &SavedFile = snapshot.files[&unit_dir.join(SERVICE)]
+			let old_gateway: &SavedFile = snapshot.files[&manager.loaded_definition(Job::Gateway)]
 				.as_ref()
 				.context("An active gateway requires its existing managed unit")?;
-			let old_unit: &str = std::str::from_utf8(&old_unit.bytes)?;
-			let config_line: String = format!(
-				"Environment={}",
-				unit_quote(&format!(
-					"CONFIG_FILE_PATH={}",
-					settings.config_path().display()
-				))?
-			);
-			let state_line: String = format!(
-				"Environment={}",
-				unit_quote(&format!(
-					"TRAPI2LITELLM_STATE_DIR={}",
-					settings.state_dir.display()
-				))?
-			);
 			ensure!(
-				old_unit.lines().any(|line| line == config_line)
-					&& old_unit.lines().any(|line| line == state_line)
-					&& old_unit.lines().any(|line| {
-						line.starts_with("ExecStart=")
-							&& line.ends_with(&format!(" serve --port {}", settings.port))
-					}),
+				manager.same_target(std::str::from_utf8(&old_gateway.bytes)?)?,
 				"Stop the gateway before changing its configuration/state directories or port"
 			);
 		}
 		Ok(snapshot)
+	}
+	fn state(&self, job: Job) -> UnitState {
+		match job {
+			Job::Gateway => self.gateway,
+			Job::Sync => self.sync,
+		}
 	}
 	fn config(&self, settings: &Settings) -> Option<&[u8]> {
 		self.files[&settings.config_path()]
@@ -136,7 +111,7 @@ impl DeploymentSnapshot {
 	}
 	fn rollback(
 		&self,
-		host: &impl Host,
+		manager: &impl ServiceManager,
 		service: &impl Service,
 		settings: &Settings,
 		activated: bool,
@@ -144,10 +119,10 @@ impl DeploymentSnapshot {
 	) -> Result<()> {
 		let mut errors: Vec<anyhow::Error> = Vec::new();
 		if activated {
-			if let Err(error) = control(host, &["stop", TIMER, SYNC_SERVICE, SERVICE]) {
+			if let Err(error) = manager.stop_all() {
 				errors.push(error.context("Rollback stop failed"));
 			}
-			if let Err(error) = control(host, &["disable", SERVICE, TIMER]) {
+			if let Err(error) = manager.disable_all() {
 				errors.push(error.context("Rollback disable failed"));
 			}
 		}
@@ -158,60 +133,54 @@ impl DeploymentSnapshot {
 				errors.push(error.context(format!("Could not restore {}", path.display())));
 			}
 		}
-		if let Err(error) = control(host, &["daemon-reload"]) {
+		if let Err(error) = manager.definitions_changed() {
 			restored = false;
 			errors.push(error.context("Rollback daemon-reload failed"));
 		}
 		if activated {
-			for (name, state) in [(SERVICE, self.gateway), (TIMER, self.timer)] {
-				let arguments: &[&str] = match state.enablement {
-					Enablement::Disabled => continue,
-					Enablement::Persistent => &["enable", name],
-					Enablement::Runtime => &["enable", "--runtime", name],
-				};
-				if let Err(error) = control(host, arguments) {
-					errors.push(error.context(format!("Could not restore {name} enablement")));
+			for job in Job::ALL {
+				if let Err(error) = manager.restore_enablement(job, self.state(job).enablement) {
+					errors.push(error.context(format!(
+						"Could not restore {} enablement",
+						manager.definition(job)
+					)));
 				}
 			}
 			if restored {
 				if self.gateway.active {
-					let recovery: Result<()> =
-						control(host, &["restart", SERVICE]).and_then(|()| {
-							service.wait_for_models(
-								&previous_models
-									.iter()
-									.cloned()
-									.collect::<BTreeSet<String>>(),
-								&catalog::digest(
-									self.config(settings)
-										.expect("Captured active configuration"),
-								),
-							)
-						});
+					let recovery: Result<()> = manager.restart(Job::Gateway).and_then(|()| {
+						service.wait_for_models(
+							&previous_models
+								.iter()
+								.cloned()
+								.collect::<BTreeSet<String>>(),
+							&catalog::digest(
+								self.config(settings)
+									.expect("Captured active configuration"),
+							),
+						)
+					});
 					if let Err(error) = recovery {
 						errors.push(error.context("Previous gateway failed rollback readiness"));
 					}
 				}
-				if self.timer.active
-					&& let Err(error) = control(host, &["start", TIMER])
+				if self.sync.active
+					&& let Err(error) = manager.start(Job::Sync)
 				{
 					errors.push(error.context("Could not restore timer activation"));
 				}
 			}
-			if self.linger == Some(false) {
-				// getuid has no pointer arguments or failure mode.
-				let uid: u32 = unsafe { libc::getuid() };
-				if let Err(error) =
-					host.run("loginctl", &["disable-linger".into(), uid.to_string()])
-				{
-					errors.push(error.context("Could not restore linger state"));
-				}
+			if self.linger == Some(false)
+				&& let Err(error) = manager.linger().and_then(|linger| linger.set(false))
+			{
+				errors.push(error.context("Could not restore linger state"));
 			}
-			for (name, expected) in [(SERVICE, self.gateway), (TIMER, self.timer)] {
-				let verification: Result<()> = host.unit_state(name).and_then(|actual| {
+			for job in Job::ALL {
+				let verification: Result<()> = manager.state(job).and_then(|actual| {
 					ensure!(
-						actual == expected,
-						"{name} activation/enablement was not restored"
+						actual == self.state(job),
+						"{} activation/enablement was not restored",
+						manager.definition(job)
 					);
 					Ok(())
 				});
@@ -220,10 +189,13 @@ impl DeploymentSnapshot {
 				}
 			}
 			if let Some(expected) = self.linger {
-				let verification: Result<()> = host.linger_enabled().and_then(|actual| {
-					ensure!(actual == expected, "User linger state was not restored");
-					Ok(())
-				});
+				let verification: Result<()> = manager
+					.linger()
+					.and_then(|linger| linger.enabled())
+					.and_then(|actual| {
+						ensure!(actual == expected, "User linger state was not restored");
+						Ok(())
+					});
 				if let Err(error) = verification {
 					errors.push(error);
 				}
@@ -261,51 +233,51 @@ fn deployment_status(
 	)
 }
 
-fn install_units(
-	host: &impl Host,
+fn install_definitions(
+	manager: &impl ServiceManager,
 	settings: &Settings,
-	units: &BTreeMap<String, String>,
+	definitions: &BTreeMap<String, String>,
 	clients: &BTreeMap<String, String>,
-) -> Result<bool> {
-	let unit_dir: PathBuf = settings.user_config_home.join("systemd/user");
-	fs::create_dir_all(&unit_dir)?;
+) -> Result<()> {
+	let definitions_dir: &Path = manager.definitions_dir();
+	fs::create_dir_all(definitions_dir)?;
 	files::private_directory(&settings.config_dir)?;
-	let mut gateway_changed: bool = false;
-	for (name, content) in units {
-		let changed: bool = managed_write(&unit_dir.join(name), content, true)?;
-		gateway_changed |= changed && name == SERVICE;
+	for (name, content) in definitions {
+		managed_write(&definitions_dir.join(name), content, |old| {
+			manager.is_managed(old, content)
+		})?;
 	}
 	for (name, content) in clients {
-		managed_write(&settings.config_dir.join(name), content, false)?;
+		managed_write(&settings.config_dir.join(name), content, marked)?;
 	}
-	control(host, &["daemon-reload"])?;
-	Ok(gateway_changed)
+	manager.definitions_changed()
 }
 
 pub(super) fn apply_deployment(
 	runtime: &impl Runtime,
 	service: &impl Service,
-	host: &impl Host,
+	manager: &impl ServiceManager,
 	settings: &Settings,
 	options: &DeployOptions,
-	units: &BTreeMap<String, String>,
+	definitions: &BTreeMap<String, String>,
 	clients: &BTreeMap<String, String>,
 ) -> Result<()> {
 	let lock: files::SyncLock = sync::lock(settings)?;
 	if !options.start {
-		install_units(host, settings, units, clients)?;
+		install_definitions(manager, settings, definitions, clients)?;
 		println!(
 			"Installed units only. To bootstrap and start: trapi2litellm deploy --start (with the same settings)"
 		);
 		return Ok(());
 	}
 	let snapshot: DeploymentSnapshot =
-		DeploymentSnapshot::capture(host, settings, options, units, clients)?;
+		DeploymentSnapshot::capture(manager, settings, options, definitions, clients)?;
+	let outdated: BTreeSet<Job> = manager.outdated(definitions)?;
 	let mut phase: &str = "installation";
 	let mut activated: bool = false;
 	let mut attempted: Option<sync::SyncResult> = None;
 	let activation: Result<()> = (|| {
-		let gateway_changed: bool = install_units(host, settings, units, clients)?;
+		install_definitions(manager, settings, definitions, clients)?;
 		phase = "synchronization";
 		attempted = Some(sync::synchronize_locked(
 			runtime, service, settings, true, true, &lock,
@@ -314,15 +286,16 @@ pub(super) fn apply_deployment(
 		phase = "activation";
 		activated = true;
 		if options.enable_linger {
-			// getuid has no pointer arguments or failure mode.
-			let uid: u32 = unsafe { libc::getuid() };
-			host.run("loginctl", &["enable-linger".into(), uid.to_string()])?;
+			manager.linger()?.set(true)?;
 		}
-		control(host, &["enable", "--now", SERVICE, TIMER])?;
-		if snapshot.gateway.active {
-			if gateway_changed {
-				control(host, &["restart", SERVICE])?;
-			} else {
+		manager.activate_all()?;
+		for job in Job::ALL
+			.into_iter()
+			.filter(|job| snapshot.state(*job).active)
+		{
+			if outdated.contains(&job) {
+				manager.restart(job)?;
+			} else if job == Job::Gateway {
 				service.reload()?;
 			}
 		}
@@ -362,7 +335,7 @@ pub(super) fn apply_deployment(
 			.as_ref()
 			.map_or(&[], |result| result.previous_models.as_slice());
 		let rollback: Result<()> =
-			snapshot.rollback(host, service, settings, activated, previous_models);
+			snapshot.rollback(manager, service, settings, activated, previous_models);
 		let status: &str = if rollback.is_ok() {
 			"rolled_back"
 		} else {
@@ -389,7 +362,11 @@ pub(super) fn apply_deployment(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::deploy::{MARKER, SystemHost, client_files, render_units};
+	use crate::deploy::{
+		Enablement, MARKER, client_files,
+		systemd::{Host, SYNC_SERVICE, SystemHost, SystemdManager, TIMER, control, render_units},
+	};
+	use crate::settings::SERVICE;
 	use serde_json::Value;
 	use std::cell::{Cell, RefCell};
 	use std::{env, time::Duration};
@@ -554,6 +531,8 @@ mod tests {
 					failure: None,
 				};
 				let host: FixtureHost = FixtureHost::default();
+				let manager: SystemdManager<'_, FixtureHost> =
+					SystemdManager::new(&host, &settings);
 				let existing_linger: bool = existing && matches!(failure, "enable" | "readiness");
 				host.linger.set(existing_linger);
 				let service: FixtureService<'_> = FixtureService {
@@ -565,7 +544,7 @@ mod tests {
 				let mut units: BTreeMap<String, String> = render_units(&options.entry, &settings)?;
 				let clients: BTreeMap<String, String> = client_files(&settings);
 				if existing {
-					install_units(&host, &settings, &units, &clients)?;
+					install_definitions(&manager, &settings, &units, &clients)?;
 					sync::synchronize(&runtime, &service, &settings, true, true)?;
 					host.units.borrow_mut().insert(
 						SERVICE.into(),
@@ -584,7 +563,7 @@ mod tests {
 				}
 				let _lock: files::SyncLock = sync::lock(&settings)?;
 				let before: DeploymentSnapshot =
-					DeploymentSnapshot::capture(&host, &settings, &options, &units, &clients)?;
+					DeploymentSnapshot::capture(&manager, &settings, &options, &units, &clients)?;
 				drop(_lock);
 				runtime.models.push("new".into());
 				match failure {
@@ -601,7 +580,7 @@ mod tests {
 					fs::create_dir(settings.state_dir.join("config.rejected.yaml"))?;
 				}
 				let outcome: Result<()> = apply_deployment(
-					&runtime, &service, &host, &settings, &options, &units, &clients,
+					&runtime, &service, &manager, &settings, &options, &units, &clients,
 				);
 				ensure!(
 					outcome.is_err(),
@@ -618,7 +597,7 @@ mod tests {
 				}
 				ensure!(
 					host.unit_state(SERVICE)? == before.gateway
-						&& host.unit_state(TIMER)? == before.timer,
+						&& host.unit_state(TIMER)? == before.sync,
 					"{existing}/{failure}: activation state was not restored"
 				);
 				ensure!(
@@ -667,6 +646,7 @@ mod tests {
 			failure: None,
 		};
 		let host: FixtureHost = FixtureHost::default();
+		let manager: SystemdManager<'_, FixtureHost> = SystemdManager::new(&host, &settings);
 		let service: FixtureService<'_> = FixtureService {
 			host: &host,
 			settings: &settings,
@@ -676,11 +656,11 @@ mod tests {
 		let units: BTreeMap<String, String> = render_units(&options.entry, &settings)?;
 		let clients: BTreeMap<String, String> = client_files(&settings);
 		apply_deployment(
-			&runtime, &service, &host, &settings, &options, &units, &clients,
+			&runtime, &service, &manager, &settings, &options, &units, &clients,
 		)?;
 		let key: String = files::local_key(&settings.key_path())?;
 		apply_deployment(
-			&runtime, &service, &host, &settings, &options, &units, &clients,
+			&runtime, &service, &manager, &settings, &options, &units, &clients,
 		)?;
 		ensure!(
 			files::local_key(&settings.key_path())? == key,
@@ -711,6 +691,7 @@ mod tests {
 			failure: None,
 		};
 		let host: FixtureHost = FixtureHost::default();
+		let manager: SystemdManager<'_, FixtureHost> = SystemdManager::new(&host, &settings);
 		let service: FixtureService<'_> = FixtureService {
 			host: &host,
 			settings: &settings,
@@ -720,7 +701,7 @@ mod tests {
 		let units: BTreeMap<String, String> = render_units(&options.entry, &settings)?;
 		let clients: BTreeMap<String, String> = client_files(&settings);
 		apply_deployment(
-			&runtime, &service, &host, &settings, &options, &units, &clients,
+			&runtime, &service, &manager, &settings, &options, &units, &clients,
 		)?;
 		let previous: Vec<u8> = fs::read(settings.config_path())?;
 		for change in ["config", "state", "port"] {
@@ -733,7 +714,7 @@ mod tests {
 			let outcome: Result<()> = apply_deployment(
 				&runtime,
 				&service,
-				&host,
+				&SystemdManager::new(&host, &changed),
 				&changed,
 				&options,
 				&render_units(&options.entry, &changed)?,
@@ -747,32 +728,14 @@ mod tests {
 				fs::read(settings.config_path())? == previous && host.unit_state(SERVICE)?.active,
 				"Reconfiguration changed the existing gateway"
 			);
-			let unit_dir: PathBuf = settings.user_config_home.join("systemd/user");
 			for (name, content) in &units {
 				ensure!(
-					fs::read_to_string(unit_dir.join(name))? == *content,
+					fs::read_to_string(manager.definitions_dir().join(name))? == *content,
 					"Reconfiguration replaced an existing unit"
 				);
 			}
 		}
 		Ok(())
-	}
-
-	#[test]
-	fn service_state_parser_rejects_unstable_or_masked_units() {
-		assert_eq!(
-			UnitState::parse("LoadState=not-found\nActiveState=inactive\nUnitFileState=\n")
-				.unwrap(),
-			UnitState::default()
-		);
-		assert!(
-			UnitState::parse("LoadState=loaded\nActiveState=activating\nUnitFileState=enabled\n")
-				.is_err()
-		);
-		assert!(
-			UnitState::parse("LoadState=masked\nActiveState=inactive\nUnitFileState=masked\n")
-				.is_err()
-		);
 	}
 
 	struct InterruptedEnable;
@@ -847,6 +810,7 @@ mod tests {
 			models: vec!["offline".into()],
 			failure: None,
 		};
+		let manager: SystemdManager<'_, SystemHost> = SystemdManager::new(&SystemHost, &settings);
 		let mut units: BTreeMap<String, String> = render_units(&options.entry, &settings)?;
 		// Keep the real timer lifecycle, but never let it authenticate to Azure.
 		units.insert(
@@ -859,7 +823,7 @@ mod tests {
 			let failure: Result<()> = apply_deployment(
 				&runtime,
 				&service,
-				&InterruptedEnable,
+				&SystemdManager::new(&InterruptedEnable, &settings),
 				&settings,
 				&options,
 				&units,
@@ -880,24 +844,18 @@ mod tests {
 			);
 
 			sync::synchronize(&runtime, &service, &settings, true, true)?;
-			install_units(&SystemHost, &settings, &units, &clients)?;
+			install_definitions(&manager, &settings, &units, &clients)?;
 			control(&SystemHost, &["enable", "--runtime", SERVICE])?;
 			control(&SystemHost, &["start", SERVICE, TIMER])?;
 			let before: DeploymentSnapshot =
-				DeploymentSnapshot::capture(&SystemHost, &settings, &options, &units, &clients)?;
+				DeploymentSnapshot::capture(&manager, &settings, &options, &units, &clients)?;
 			let previous: Vec<u8> = fs::read(settings.config_path())?;
 			let models: BTreeSet<String> = BTreeSet::from(["trapi/offline".into()]);
 			service.wait_for_models(&models, &catalog::digest(&previous))?;
 			runtime.models.push("new".into());
 			service.interrupt.set(true);
 			let failure: Result<()> = apply_deployment(
-				&runtime,
-				&service,
-				&SystemHost,
-				&settings,
-				&options,
-				&units,
-				&clients,
+				&runtime, &service, &manager, &settings, &options, &units, &clients,
 			);
 			ensure!(failure.is_err(), "Redeployment failure was not injected");
 			ensure!(
@@ -906,7 +864,7 @@ mod tests {
 			);
 			ensure!(
 				SystemHost.unit_state(SERVICE)? == before.gateway
-					&& SystemHost.unit_state(TIMER)? == before.timer,
+					&& SystemHost.unit_state(TIMER)? == before.sync,
 				"Previous unit activation/enablement was not restored"
 			);
 			service.wait_for_models(&models, &catalog::digest(&previous))?;
@@ -935,7 +893,7 @@ mod tests {
 			Ok(())
 		})();
 		let cleanup: Result<()> = (|| {
-			let unit_dir: PathBuf = settings.user_config_home.join("systemd/user");
+			let unit_dir: &Path = manager.definitions_dir();
 			let installed: Vec<&str> = units
 				.keys()
 				.filter(|name| unit_dir.join(name).exists())

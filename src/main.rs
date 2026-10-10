@@ -99,7 +99,7 @@ fn run(cli: Cli) -> Result<()> {
 				&sync::SystemService {
 					settings: &settings,
 				},
-				&deploy::SystemHost,
+				&deploy::systemd::SystemdManager::new(&deploy::systemd::SystemHost, &settings),
 				&settings,
 				&options,
 			)
